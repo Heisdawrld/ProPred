@@ -305,11 +305,11 @@ input[type=date]::-webkit-calendar-picker-indicator{filter:invert(1) opacity(.4)
 </section>
 
 <div class="stats-bar">
-  <div class="stat-item"><div class="stat-n">71%</div><div class="stat-l">Overall Accuracy</div></div>
-  <div class="stat-item"><div class="stat-n">68%</div><div class="stat-l">Value Tip Rate</div></div>
-  <div class="stat-item"><div class="stat-n">84%</div><div class="stat-l">Safe Tip Rate</div></div>
+  <div class="stat-item" id="statOverall"><div class="stat-n">—</div><div class="stat-l">Overall Accuracy</div></div>
+  <div class="stat-item" id="statValue"><div class="stat-n">—</div><div class="stat-l">Value Tip Rate</div></div>
+  <div class="stat-item" id="statSafe"><div class="stat-n">—</div><div class="stat-l">Safe Tip Rate</div></div>
   <div class="stat-item" id="fixtureCountStat"><div class="stat-n">—</div><div class="stat-l">Fixtures Today</div></div>
-  <div class="stat-item"><div class="stat-n">v2.1</div><div class="stat-l">Model Version</div></div>
+  <div class="stat-item" id="statResolved"><div class="stat-n">—</div><div class="stat-l">Tips Tracked</div></div>
 </div>
 
 <div class="main-wrap" id="predictions">
@@ -337,30 +337,33 @@ input[type=date]::-webkit-calendar-picker-indicator{filter:invert(1) opacity(.4)
   <div class="sidebar">
     <div class="scard">
       <div class="scard-title">🧠 Model Brain</div>
-      <div class="mm-row"><div class="mm-lbl">Overall Accuracy</div><div class="mm-bar"><div class="mm-fill" style="width:71%;background:var(--green)"></div></div><div class="mm-val">71%</div></div>
-      <div class="mm-row"><div class="mm-lbl">Value Tips (30d)</div><div class="mm-bar"><div class="mm-fill" style="width:68%;background:var(--gold)"></div></div><div class="mm-val">68%</div></div>
-      <div class="mm-row"><div class="mm-lbl">Safe Tips (30d)</div><div class="mm-bar"><div class="mm-fill" style="width:84%;background:var(--green)"></div></div><div class="mm-val">84%</div></div>
-      <div class="mm-row"><div class="mm-lbl">Avoid Accuracy</div><div class="mm-bar"><div class="mm-fill" style="width:76%;background:var(--blue)"></div></div><div class="mm-val">76%</div></div>
-      <div class="mm-row"><div class="mm-lbl">H2H Match Rate</div><div class="mm-bar"><div class="mm-fill" style="width:89%;background:var(--purple)"></div></div><div class="mm-val">89%</div></div>
+      <div id="modelBrainRows">
+        <div class="mm-row"><div class="mm-lbl">Overall Accuracy</div><div class="mm-bar"><div class="mm-fill" id="mb-overall" style="width:0%;background:var(--green)"></div></div><div class="mm-val" id="mbv-overall">—</div></div>
+        <div class="mm-row"><div class="mm-lbl">Value Tips</div><div class="mm-bar"><div class="mm-fill" id="mb-val" style="width:0%;background:var(--gold)"></div></div><div class="mm-val" id="mbv-val">—</div></div>
+        <div class="mm-row"><div class="mm-lbl">Safe Tips</div><div class="mm-bar"><div class="mm-fill" id="mb-safe" style="width:0%;background:var(--green)"></div></div><div class="mm-val" id="mbv-safe">—</div></div>
+        <div class="mm-row"><div class="mm-lbl">Reliable Tips</div><div class="mm-bar"><div class="mm-fill" id="mb-reliable" style="width:0%;background:var(--blue)"></div></div><div class="mm-val" id="mbv-reliable">—</div></div>
+        <div class="mm-row"><div class="mm-lbl">Teams Tracked</div><div class="mm-bar"><div class="mm-fill" id="mb-teams" style="width:0%;background:var(--purple)"></div></div><div class="mm-val" id="mbv-teams">—</div></div>
+      </div>
       <div style="margin-top:.9rem;padding-top:.9rem;border-top:1px solid var(--border)">
         <div style="font-size:.58rem;color:var(--dim);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:.35rem">Last Updated</div>
         <div style="font-family:'Space Mono',monospace;font-size:.74rem" id="lastUpdated">—</div>
       </div>
     </div>
-    <div class="scard">
-      <div class="scard-title">📈 Track Record</div>
-      <div class="tr-row"><div class="tr-icon tiW">✓</div><div><div class="tr-match">Man City Win · PL</div><div class="tr-tip">Value · 1.72 ✓</div></div></div>
-      <div class="tr-row"><div class="tr-icon tiW">✓</div><div><div class="tr-match">BTTS · Barca vs Atleti</div><div class="tr-tip">Safe · 1.80 ✓</div></div></div>
-      <div class="tr-row"><div class="tr-icon tiW">✓</div><div><div class="tr-match">Real Madrid -1 AH</div><div class="tr-tip">Value · 2.10 ✓</div></div></div>
-      <div class="tr-row"><div class="tr-icon tiL">✗</div><div><div class="tr-match">Napoli Over 2.5</div><div class="tr-tip">Safe · 1.55 ✗</div></div></div>
-      <div class="tr-row"><div class="tr-icon tiW">✓</div><div><div class="tr-match">AVOID Signal Correct</div><div class="tr-tip">Model saved you</div></div></div>
+
+    <div class="scard" id="trackRecordCard">
+      <div class="scard-title">📈 Track Record <span id="trLive" style="font-size:.6rem;color:var(--green);font-family:'Space Mono',monospace;font-weight:normal"></span></div>
+      <div id="trackRecordRows">
+        <div style="color:var(--dim);font-size:.72rem;text-align:center;padding:1rem 0">Loading track record…</div>
+      </div>
     </div>
+
     <div class="scard api-card">
       <div class="scard-title" style="color:var(--gold);font-size:.9rem">⚡ Live Data Sources</div>
       <div class="api-stat"><div class="api-dot" id="d1" style="background:var(--green)"></div>Sportmonks Fixtures</div>
       <div class="api-stat"><div class="api-dot" id="d2" style="background:var(--green)"></div>H2H Match History</div>
       <div class="api-stat"><div class="api-dot" id="d3" style="background:var(--green)"></div>Team Form Tracker</div>
-      <div class="api-stat"><div class="api-dot" style="background:var(--gold)"></div>AI Analysis Engine</div>
+      <div class="api-stat"><div class="api-dot" id="d4" style="background:var(--purple)"></div>Team Memory DB</div>
+      <div class="api-stat"><div class="api-dot" id="d5" style="background:var(--gold)"></div>Prediction Tracker</div>
     </div>
   </div>
 </div>
@@ -574,8 +577,9 @@ function runModel(fixture, h2h, homeFm, awayFm){
   };
   const hFS=fs(homeFm.dots,true), aFS=fs(awayFm.dots,false);
 
-  const hSt = getTeamStats(homeFm.fixtures, homeT?.id);
-  const aSt = getTeamStats(awayFm.fixtures, awayT?.id);
+  // Use blended stats (memory-enriched) if available, else compute fresh
+  const hSt = homeFm.blendedStats !== undefined ? homeFm.blendedStats : getTeamStats(homeFm.fixtures, homeT?.id);
+  const aSt = awayFm.blendedStats !== undefined ? awayFm.blendedStats : getTeamStats(awayFm.fixtures, awayT?.id);
 
   // H2H record
   let hW=0,dW=0,aW=0;
@@ -783,16 +787,139 @@ function buildInsight(m, homeN, awayN){
   return lines.join(' ');
 }
 
+// ── LEARNING SYSTEM ────────────────────────────────────────────────────────
+
+let calibrationData = null;
+
+// Load calibration + track record on page start
+async function loadLearningData() {
+  try {
+    const [calibResp, resultsResp, healthResp] = await Promise.all([
+      fetch('/calibration').then(r=>r.json()).catch(()=>null),
+      fetch('/predictions/results?limit=15').then(r=>r.json()).catch(()=>[]),
+      fetch('/health').then(r=>r.json()).catch(()=>null),
+    ]);
+
+    calibrationData = calibResp;
+
+    // Update stats bar
+    if(calibResp?.overall?.rate!=null){
+      document.getElementById('statOverall').querySelector('.stat-n').textContent = calibResp.overall.rate+'%';
+    }
+    if(calibResp?.byType?.val?.rate!=null){
+      document.getElementById('statValue').querySelector('.stat-n').textContent = calibResp.byType.val.rate+'%';
+    }
+    if(calibResp?.byType?.safe?.rate!=null){
+      document.getElementById('statSafe').querySelector('.stat-n').textContent = calibResp.byType.safe.rate+'%';
+    }
+    if(calibResp?.overall?.total!=null){
+      document.getElementById('statResolved').querySelector('.stat-n').textContent = calibResp.overall.total;
+    }
+
+    // Update Model Brain sidebar
+    const setBar=(id,val,max=100)=>{
+      const pct=Math.min(Math.round(val/max*100),100);
+      const fill=document.getElementById('mb-'+id);
+      const valEl=document.getElementById('mbv-'+id);
+      if(fill) fill.style.width=pct+'%';
+      if(valEl) valEl.textContent=(typeof val==='number'&&!isNaN(val))?val+(id==='teams'?'':'%'):'—';
+    };
+
+    if(calibResp?.overall?.rate!=null) setBar('overall', calibResp.overall.rate);
+    if(calibResp?.byType?.val?.rate!=null) setBar('val', calibResp.byType.val.rate);
+    if(calibResp?.byType?.safe?.rate!=null) setBar('safe', calibResp.byType.safe.rate);
+    if(calibResp?.byType?.reliable?.rate!=null) setBar('reliable', calibResp.byType.reliable.rate);
+    if(healthResp?.teams!=null) setBar('teams', Math.min(healthResp.teams, 500), 500);
+
+    // Update Track Record sidebar with real results
+    const trRows = document.getElementById('trackRecordRows');
+    const trLive = document.getElementById('trLive');
+    if(resultsResp?.length){
+      if(trLive) trLive.textContent = `(${resultsResp.length} tracked)`;
+      trRows.innerHTML = resultsResp.slice(0,8).map(p=>{
+        const icon = p.result==='win'?'tiW':p.result==='loss'?'tiL':'tiP';
+        const sym  = p.result==='win'?'✓':p.result==='loss'?'✗':'~';
+        const score= p.homeGoals!=null?` · ${p.homeGoals}–${p.awayGoals}`:'';
+        return `<div class="tr-row">
+          <div class="tr-icon ${icon}">${sym}</div>
+          <div>
+            <div class="tr-match">${p.homeTeam||'?'} vs ${p.awayTeam||'?'}${score}</div>
+            <div class="tr-tip">${p.tip} · ${p.conf}% conf</div>
+          </div>
+        </div>`;
+      }).join('');
+    } else {
+      trRows.innerHTML = `<div style="color:var(--dim);font-size:.72rem;text-align:center;padding:1rem 0">No results yet — predictions save automatically and resolve after each match.</div>`;
+    }
+
+  } catch(e) {
+    console.log('[LEARNING] Could not load calibration:', e.message);
+  }
+}
+
+// Save a prediction to the server
+async function savePrediction(fixture, model, homeTeam, awayTeam) {
+  try {
+    await fetch('/predictions/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fixtureId:  fixture.id,
+        date:       fixture.starting_at?.split('T')[0],
+        homeTeam:   homeTeam?.name || 'Home',
+        awayTeam:   awayTeam?.name || 'Away',
+        homeTeamId: homeTeam?.id,
+        awayTeamId: awayTeam?.id,
+        league:     fixture.league?.name || '',
+        tip:        model.main,
+        tipType:    model.tipType,
+        safeTip:    model.safe,
+        conf:       model.conf,
+        hLambda:    model.hLambda,
+        aLambda:    model.aLambda,
+        pResult:    model.pResult,
+        pOver25:    model.pOver25,
+        pBTTS:      model.pBTTS,
+      })
+    });
+  } catch(e) {
+    // Silently fail — prediction saving is non-critical
+  }
+}
+
+// Save team memory to server
+async function saveTeamMemory(teamId, stats) {
+  try {
+    await fetch('/memory/team', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ teamId, stats })
+    });
+  } catch(e) {}
+}
+
+// Get calibration-adjusted confidence
+// If our 70-80% tips are actually hitting 85%, adjust upward (and vice versa)
+function getCalibratedConf(rawConf, tipType) {
+  if(!calibrationData?.buckets) return rawConf;
+  const bucket = Math.floor(rawConf / 10) * 10;
+  const b = calibrationData.buckets[bucket];
+  if(!b || b.total < 5) return rawConf; // need at least 5 samples to calibrate
+  // Apply half the error as correction (don't overcorrect)
+  const adjustment = Math.round(b.error * 0.5);
+  return Math.max(40, Math.min(rawConf + adjustment, 94));
+}
+
 function dots(form){return(form||[]).map(r=>`<div class="fd ${r}"></div>`).join('');}
 
-function renderCard(f,h2h,hFm,aFm){
+function renderCard(f,h2h,hFm,aFm,precomputedModel){
   const hT=f.participants?.find(p=>p.meta?.location==='home');
   const aT=f.participants?.find(p=>p.meta?.location==='away');
   const lg=f.league?.name||'Football';
   const state=(f.state?.short_name||'').toUpperCase();
   const isLive=['LIVE','HT','ET','PEN','1H','2H'].includes(state);
   const isFT=['FT','AET','AP'].includes(state);
-  const m=runModel(f,h2h,hFm,aFm);
+  const m=precomputedModel||runModel(f,h2h,hFm,aFm);
   const insight=buildInsight(m,hT?.name||'Home',aT?.name||'Away');
   const time=new Date(f.starting_at).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
   let midHtml=`<div class="vs-sep">VS</div>`;
@@ -834,7 +961,7 @@ function renderCard(f,h2h,hFm,aFm){
         <div class="stat-box"><div class="sb-val">${Math.round(st.over25Rate*100)}%</div><div class="sb-lbl">Over 2.5</div></div>
       </div>
       ${split?`<div style="font-size:.65rem;color:var(--dim);margin-bottom:.5rem">${split}</div>`:''}
-      <div style="font-size:.65rem;color:var(--dim);margin-bottom:.9rem">Momentum: ${mom} &nbsp;·&nbsp; Scoring streak: ${st.scoringStreak} games &nbsp;·&nbsp; Sample: ${st.matches} matches</div>`;
+      <div style="font-size:.65rem;color:var(--dim);margin-bottom:.9rem">Momentum: ${mom} &nbsp;·&nbsp; Scoring streak: ${st.scoringStreak} games &nbsp;·&nbsp; Sample: ${st.matches} matches${st.hasMemory?` &nbsp;·&nbsp; <span style="color:var(--purple)">🧠 Memory: ${st.memWeight}% weight</span>`:''}</div>`;
   };
   return`<div class="pcard ${m.badgeClass}" id="c${f.id}" data-type="${m.tipType}">
   <div class="card-head">
@@ -935,30 +1062,106 @@ async function loadDate(date){
     document.getElementById('filterRow').style.display='flex';
     document.getElementById('aiBanner').style.display='none';
 
-    // Load all cards with progress tracking
+    // ── STEP 1: Auto-resolve any pending predictions from past dates ──────
+    fetch('/predictions/auto-resolve',{method:'POST'}).catch(()=>{});
+
+    // ── STEP 2: Load all cards with memory read + write + prediction save ─
     let done=0;
     const allModels=[];
     await Promise.allSettled(fixtures.map(async f=>{
       const hT=f.participants?.find(p=>p.meta?.location==='home');
       const aT=f.participants?.find(p=>p.meta?.location==='away');
       if(!hT||!aT){done++;return;}
-      const[h2hD,hFixD,aFixD]=await Promise.all([
+
+      // Fetch live data + stored team memory in parallel
+      const[h2hD,hFixD,aFixD,hMemResp,aMemResp]=await Promise.all([
         api(`/fixtures/head-to-head/${hT.id}/${aT.id}?include=participants;scores&per_page=10`).then(r=>r.data||[]).catch(()=>[]),
         api(`/teams/${hT.id}/fixtures?per_page=20&sort=-starting_at&include=participants;scores`).then(r=>r.data||[]).catch(()=>[]),
-        api(`/teams/${aT.id}/fixtures?per_page=20&sort=-starting_at&include=participants;scores`).then(r=>r.data||[]).catch(()=>[])
+        api(`/teams/${aT.id}/fixtures?per_page=20&sort=-starting_at&include=participants;scores`).then(r=>r.data||[]).catch(()=>[]),
+        fetch(`/memory/team/${hT.id}`).then(r=>r.json()).catch(()=>({found:false})),
+        fetch(`/memory/team/${aT.id}`).then(r=>r.json()).catch(()=>({found:false})),
       ]);
-      const hFm=getForm(hFixD,hT.id),aFm=getForm(aFixD,aT.id);
-      const modelResult=runModel(f,h2hD,hFm,aFm);
-      allModels.push({f,modelResult,hT,aT});
-      const wrap=document.getElementById(`w${f.id}`);
-      if(wrap)wrap.outerHTML=renderCard(f,h2hD,hFm,aFm);
+
+      const hFm=getForm(hFixD,hT.id), aFm=getForm(aFixD,aT.id);
+
+      // Compute fresh stats from live data
+      const freshHSt = getTeamStats(hFixD, hT.id);
+      const freshASt = getTeamStats(aFixD, aT.id);
+
+      // Blend with stored memory if available — memory adds historical depth
+      // Formula: blended = (freshStat * liveWeight) + (memStat * memWeight)
+      // The more observations stored, the more we trust memory
+      const blendStats = (fresh, mem) => {
+        if(!fresh && !mem) return null;
+        if(!fresh) return mem;
+        if(!mem || !mem.found || !mem.team) return fresh;
+        const stored = mem.team;
+        const obsCount = stored.observationCount || 1;
+        // Memory weight grows with observations, capped at 40%
+        // After 20+ observations, memory contributes meaningfully
+        const memWeight = Math.min(obsCount / 50, 0.4);
+        const liveWeight = 1 - memWeight;
+        const blend = (a, b) => a * liveWeight + b * memWeight;
+        return {
+          ...fresh,
+          // Blend the key λ-driving stats
+          wAvgScored:      blend(fresh.wAvgScored,    stored.wAvgScored    ?? fresh.wAvgScored),
+          wAvgConceded:    blend(fresh.wAvgConceded,  stored.wAvgConceded  ?? fresh.wAvgConceded),
+          winRate:         blend(fresh.winRate,        stored.winRate       ?? fresh.winRate),
+          drawRate:        blend(fresh.drawRate,       stored.drawRate      ?? fresh.drawRate),
+          bttsRate:        blend(fresh.bttsRate,       stored.bttsRate      ?? fresh.bttsRate),
+          over25Rate:      blend(fresh.over25Rate,     stored.over25Rate    ?? fresh.over25Rate),
+          csRate:          blend(fresh.csRate,         stored.csRate        ?? fresh.csRate),
+          ftsRate:         blend(fresh.ftsRate,        stored.ftsRate       ?? fresh.ftsRate),
+          homeAvgScored:   fresh.homeAvgScored   ?? stored.homeAvgScored,
+          homeAvgConceded: fresh.homeAvgConceded ?? stored.homeAvgConceded,
+          awayAvgScored:   fresh.awayAvgScored   ?? stored.awayAvgScored,
+          awayAvgConceded: fresh.awayAvgConceded ?? stored.awayAvgConceded,
+          // Keep fresh momentum & streak (these must be recent)
+          momentum:      fresh.momentum,
+          scoringStreak: fresh.scoringStreak,
+          // Track total observations seen
+          observationCount: (stored.observationCount || 0) + fresh.matches,
+          hasMemory: true,
+          memWeight: Math.round(memWeight * 100),
+        };
+      };
+
+      // Inject blended stats directly into form objects so runModel uses them
+      hFm.blendedStats = blendStats(freshHSt, hMemResp);
+      aFm.blendedStats = blendStats(freshASt, aMemResp);
+
+      // Run model with blended stats
+      const modelResult = runModel(f, h2hD, hFm, aFm);
+
+      // Apply calibration adjustment to confidence
+      const calibConf = getCalibratedConf(modelResult.conf, modelResult.tipType);
+      modelResult.conf = calibConf;
+      modelResult.confClass = calibConf>74?'cb-hi':calibConf>54?'cb-mid':'cb-lo';
+
+      allModels.push({f, modelResult, hT, aT});
+
+      // Render the card
+      const wrap = document.getElementById(`w${f.id}`);
+      if(wrap) wrap.outerHTML = renderCard(f, h2hD, hFm, aFm, modelResult);
+
+      // ── BACKGROUND LEARNING (fire-and-forget) ──────────────────────────
+      // Save team memory so next visit has richer data
+      if(freshHSt) saveTeamMemory(hT.id, {...freshHSt, teamId:hT.id, teamName:hT.name});
+      if(freshASt) saveTeamMemory(aT.id, {...freshASt, teamId:aT.id, teamName:aT.name});
+
+      // Save prediction for result tracking
+      savePrediction(f, modelResult, hT, aT);
+
+      // Progress
       done++;
       const pct=Math.round(done/fixtures.length*100);
       const pw=document.getElementById('progressWrap');
       const pb=document.getElementById('progBar');
+      if(pw) pw.querySelector('div:first-child') && (pw.childNodes[0].textContent=`Loading ${done} / ${fixtures.length} fixtures…`);
       if(pw) pw.textContent=`Loading ${done} / ${fixtures.length} fixtures…`;
       if(pb) pb.style.width=pct+'%';
-      if(pw&&done===fixtures.length){ setTimeout(()=>pw.remove(),600); }
+      if(pw&&done===fixtures.length){ setTimeout(()=>pw.remove(),800); }
     }));
 
     // Build Top Picks banner — top 3 VALUE tips by confidence
@@ -995,6 +1198,8 @@ async function loadDate(date){
 
     applyFilter(currentFilter);
     showToast('✅ Predictions Ready',`${fixtures.length} fixtures analysed — ${topPicks.length} value picks found.`);
+    // Refresh learning data after predictions are saved
+    setTimeout(loadLearningData, 3000);
   }catch(err){
     console.error(err);
     setPill('ERROR',false);
@@ -1047,7 +1252,7 @@ function switchXTab(btn,tabId){
   panel.querySelectorAll('[id]').forEach(c=>{if(c.id.startsWith('x'))c.style.display=c.id===tabId?'block':'none';});
 }
 
-(function(){const d=todayISO();document.getElementById('globalDate').value=d;buildDateBar(d);loadDate(d);})();
+(function(){const d=todayISO();document.getElementById('globalDate').value=d;buildDateBar(d);loadDate(d);loadLearningData();})();
 </script>
 </body>
 </html>
