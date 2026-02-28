@@ -113,6 +113,7 @@ input[type=date]::-webkit-calendar-picker-indicator{filter:invert(1) opacity(.4)
 .bdg-avoid{background:var(--red-dim);color:var(--red);border:1px solid rgba(255,68,85,.2)}
 .bdg-rel{background:var(--blue-dim);color:var(--blue);border:1px solid rgba(77,166,255,.2)}
 .bdg-hot{background:rgba(255,112,64,.1);color:var(--orange);border:1px solid rgba(255,112,64,.2)}
+.bdg-risky{background:rgba(255,68,85,.06);color:#ff8899;border:1px solid rgba(255,68,85,.18)}
 .bdg-live{background:var(--green-dim);color:var(--green);border:1px solid rgba(0,230,118,.3);animation:bpulse 1.5s infinite}
 @keyframes bpulse{0%,100%{opacity:1}50%{opacity:.5}}
 
@@ -406,11 +407,15 @@ function getForm(fixtures,teamId){
 function runModel(fixture,h2h,homeFm,awayFm){
   const homeT=fixture.participants?.find(p=>p.meta?.location==='home');
   const awayT=fixture.participants?.find(p=>p.meta?.location==='away');
-  const fs=dots=>{
-    if(!dots.length)return 0.45;
+
+  // Form score: 0-1 scale. Default to 0.4 (slight home bias) if no data
+  const fs=(dots,isHome)=>{
+    if(!dots||!dots.length) return isHome?0.44:0.38; // home advantage default
     return dots.reduce((a,r)=>a+(r==='W'?3:r==='D'?1:0),0)/15;
   };
-  const hFS=fs(homeFm.dots),aFS=fs(awayFm.dots);
+  const hFS=fs(homeFm.dots,true), aFS=fs(awayFm.dots,false);
+
+  // H2H record
   let hW=0,dW=0,aW=0;
   (h2h||[]).slice(0,10).forEach(m=>{
     const hG=getGoals(m.scores,'home'),aG=getGoals(m.scores,'away');
@@ -421,49 +426,125 @@ function runModel(fixture,h2h,homeFm,awayFm){
     else dW++;
   });
   const tot=hW+dW+aW||1;
-  const h2hRate=hW/tot;
-  const homeC=hFS*0.5+h2hRate*0.5,awayC=aFS*0.55;
-  const variance=Math.abs(hFS-aFS)<0.18&&hFS<0.5&&aFS<0.5;
-  let tipType,main,safe,conf,badgeClass,badges;
-  if(variance){
-    tipType='avoid';badgeClass='avoid';badges=['🚫 AVOID'];
-    main='Too Unpredictable';safe=null;conf=Math.round((0.28+Math.random()*0.18)*100);
-  }else if(homeC>0.62){
-    tipType='val';badgeClass='val';badges=['💎 VALUE'];
-    if(homeC>0.75)badges.unshift('🔥 HOT');
-    if(h2hRate>0.6)badges.push('⭐ RELIABLE');
-    main=`${homeT?.name||'Home'} Win${hFS>0.7?' + BTTS':''}`;
-    safe=`${homeT?.name?.split(' ').pop()||'Home'} -0.5 AH`;
-    conf=Math.min(Math.round(homeC*100+12),94);
-  }else if(awayC>0.58){
-    tipType='val';badgeClass='val';badges=['💎 VALUE'];
-    main=`${awayT?.name||'Away'} Win`;safe='Draw No Bet Away';
-    conf=Math.min(Math.round(awayC*100+10),89);
-  }else if(hFS>0.5&&h2hRate>0.55){
-    tipType='reliable';badgeClass='reliable';badges=['⭐ RELIABLE'];
-    main=`${homeT?.name||'Home'} Win or Draw`;safe='Over 1.5 Goals';
-    conf=Math.round(60+hFS*25);
-  }else if(hFS>0.45){
-    tipType='safe';badgeClass='safe';badges=['🛡 SAFE'];
-    main=`${homeT?.name||'Home'} Win`;safe='Over 1.5 Goals';
-    conf=Math.min(Math.round(hFS*100+18),88);
-  }else{
-    tipType='safe';badgeClass='safe';badges=['🛡 SAFE'];
-    main='Both Teams To Score';safe='Over 1.5 Goals';
-    conf=Math.round(52+(hFS+aFS)*12);
+  const h2hRate=hW/tot; // home win rate in H2H
+
+  // Composite scores — home gets slight structural advantage
+  const homeC = hFS*0.45 + h2hRate*0.35 + 0.2; // 0.2 = home field bonus
+  const awayC = aFS*0.55 + (aW/tot)*0.35;
+  const drawC  = dW/tot * 0.4 + (Math.abs(hFS-aFS)<0.1 ? 0.15 : 0);
+
+  // High variance flag — only truly chaotic matches (NOT a blocker, just a badge)
+  const isHighVariance = (
+    homeFm.dots.length < 2 && awayFm.dots.length < 2 && tot < 3
+  );
+
+  // Goals tendency
+  const avgHomeGoals = homeFm.fixtures.length
+    ? homeFm.fixtures.reduce((a,f)=>{
+        const isH=f.participants?.find(p=>p.meta?.location==='home')?.id===homeT?.id;
+        const g=isH?getGoals(f.scores,'home'):getGoals(f.scores,'away');
+        return a+(g||0);
+      },0)/homeFm.fixtures.length : 1.3;
+  const bttsLikely = hFS>0.4 && aFS>0.35 && avgHomeGoals>1.2;
+
+  let tipType,main,safe,conf,badgeClass,badges=[];
+
+  // ── ALWAYS PRODUCE A PREDICTION ──
+  if(homeC > awayC + 0.08 && homeC > 0.52){
+    // Home favoured
+    if(homeC>0.72){
+      tipType='val'; badgeClass='val'; badges=['💎 VALUE'];
+      if(homeC>0.80) badges.unshift('🔥 HOT');
+      if(h2hRate>0.6&&tot>=3) badges.push('⭐ RELIABLE');
+      main=`${homeT?.name||'Home'} Win${bttsLikely?' + BTTS':''}`;
+      safe=`${homeT?.name?.split(' ').pop()||'Home'} DNB`;
+      conf=Math.min(Math.round(homeC*100+8),93);
+    } else {
+      tipType='safe'; badgeClass='safe'; badges=['🛡 SAFE'];
+      if(h2hRate>0.55&&tot>=3) badges.push('⭐ RELIABLE');
+      main=`${homeT?.name||'Home'} Win`;
+      safe='Over 1.5 Goals';
+      conf=Math.min(Math.round(homeC*100+5),85);
+    }
+  } else if(awayC > homeC + 0.08 && awayC > 0.48){
+    // Away favoured
+    if(awayC>0.65){
+      tipType='val'; badgeClass='val'; badges=['💎 VALUE'];
+      main=`${awayT?.name||'Away'} Win`;
+      safe=`${awayT?.name?.split(' ').pop()||'Away'} DNB`;
+      conf=Math.min(Math.round(awayC*100+10),90);
+    } else {
+      tipType='safe'; badgeClass='safe'; badges=['🛡 SAFE'];
+      main=`${awayT?.name||'Away'} Win or Draw`;
+      safe='Over 1.5 Goals';
+      conf=Math.min(Math.round(awayC*100+8),82);
+    }
+  } else if(drawC>0.22 && Math.abs(hFS-aFS)<0.12){
+    // Draw likely
+    tipType='reliable'; badgeClass='reliable'; badges=['⭐ RELIABLE'];
+    main='Draw / Both Score';
+    safe='Over 1.5 Goals';
+    conf=Math.round(55+drawC*40);
+  } else if(bttsLikely){
+    // Goal-based pick
+    tipType='safe'; badgeClass='safe'; badges=['🛡 SAFE'];
+    main='Both Teams To Score';
+    safe='Over 1.5 Goals';
+    conf=Math.round(58+(hFS+aFS)*20);
+  } else {
+    // Slight home default — home advantage always exists
+    tipType='safe'; badgeClass='safe'; badges=['🛡 SAFE'];
+    main=`${homeT?.name||'Home'} Win or Draw`;
+    safe='Over 1.5 Goals';
+    conf=Math.round(54+hFS*18);
   }
-  conf=Math.max(28,Math.min(conf,95));
+
+  // Add AVOID as a supplementary warning badge (never the ONLY badge)
+  if(isHighVariance){
+    badges.push('⚠️ RISKY');
+    // Reduce confidence slightly to signal caution
+    conf=Math.max(conf-12, 35);
+  }
+
+  // Cap confidence
+  conf=Math.max(35,Math.min(conf,94));
+
   return{tipType,main,safe,conf,badgeClass,badges,hW,dW,aW,tot,hFS,aFS,
-    confClass:conf>74?'cb-hi':conf>54?'cb-mid':'cb-lo'};
+    isHighVariance,confClass:conf>74?'cb-hi':conf>54?'cb-mid':'cb-lo'};
 }
 
 function buildInsight(m,homeN,awayN){
-  if(m.tipType==='avoid')return`Both teams show inconsistent recent form with no clear H2H dominant side. Model detects high variance — skip this fixture.`;
   const hPct=Math.round(m.hW/m.tot*100);
-  const formNote=m.hFS>0.65?`${homeN} are in strong form (${Math.round(m.hFS*15)}/15 pts last 5).`:m.aFS>0.6?`${awayN} arrive with solid momentum.`:`Form is close — backing goals or draw protection.`;
-  const h2hNote=m.tot>=3?`${homeN} won ${m.hW} of ${m.tot} H2H meetings (${hPct}%).`:'';
-  const tipNote=m.tipType==='val'?'Model probability exceeds implied odds — genuine edge detected.':m.tipType==='safe'?'Conservative pick with strong probability support.':'Consistent historical patterns favour this outcome.';
-  return[formNote,h2hNote,tipNote].filter(Boolean).join(' ');
+
+  // Form note
+  const formNote = m.hFS>0.65
+    ? `${homeN} are in strong form (${Math.round(m.hFS*15)}/15 pts last 5).`
+    : m.aFS>0.6
+    ? `${awayN} arrive with solid recent momentum.`
+    : m.hFS>0.4||m.aFS>0.4
+    ? `Form is relatively balanced — targeting goals or home advantage.`
+    : `Limited form data available. Model applying home-field weighting.`;
+
+  // H2H note
+  const h2hNote = m.tot>=3
+    ? `${homeN} won ${m.hW} of ${m.tot} H2H meetings (${hPct}%).`
+    : m.tot>=1
+    ? `Limited H2H history (${m.tot} meeting${m.tot>1?'s':''}) — model leaning on form data.`
+    : `No H2H history found. Prediction based entirely on form signals.`;
+
+  // Tip note
+  const tipNote = m.tipType==='val'
+    ? 'Model detects clear edge — value confirmed.'
+    : m.tipType==='reliable'
+    ? 'Strong historical pattern supports this outcome.'
+    : 'Safe, high-probability selection.';
+
+  // Risk warning if flagged
+  const riskNote = m.isHighVariance
+    ? '⚠️ Low data confidence — treat as speculative. Consider smaller stake.'
+    : '';
+
+  return[formNote,h2hNote,tipNote,riskNote].filter(Boolean).join(' ');
 }
 
 function dots(form){return(form||[]).map(r=>`<div class="fd ${r}"></div>`).join('');}
@@ -480,7 +561,7 @@ function renderCard(f,h2h,hFm,aFm){
   const time=new Date(f.starting_at).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
   let midHtml=`<div class="vs-sep">VS</div>`;
   if(isLive||isFT){const hG=getGoals(f.scores,'home')??'–',aG=getGoals(f.scores,'away')??'–';midHtml=`<div class="live-score">${hG}:${aG}</div>`;}
-  const bdgHtml=m.badges.map(b=>b.includes('VALUE')?`<span class="bdg bdg-val">${b}</span>`:b.includes('SAFE')?`<span class="bdg bdg-safe">${b}</span>`:b.includes('AVOID')?`<span class="bdg bdg-avoid">${b}</span>`:b.includes('RELIABLE')?`<span class="bdg bdg-rel">${b}</span>`:b.includes('HOT')?`<span class="bdg bdg-hot">${b}</span>`:'').join('');
+  const bdgHtml=m.badges.map(b=>b.includes('VALUE')?`<span class="bdg bdg-val">${b}</span>`:b.includes('SAFE')?`<span class="bdg bdg-safe">${b}</span>`:b.includes('AVOID')?`<span class="bdg bdg-avoid">${b}</span>`:b.includes('RELIABLE')?`<span class="bdg bdg-rel">${b}</span>`:b.includes('HOT')?`<span class="bdg bdg-hot">${b}</span>`:b.includes('RISKY')?`<span class="bdg bdg-risky">${b}</span>`:'').join('');
   const h2hRows=(h2h||[]).slice(0,5).map(hm=>{
     const hp=hm.participants?.find(p=>p.meta?.location==='home'),ap=hm.participants?.find(p=>p.meta?.location==='away');
     const hG=getGoals(hm.scores,'home')??'?',aG=getGoals(hm.scores,'away')??'?';
@@ -509,16 +590,16 @@ function renderCard(f,h2h,hFm,aFm){
       <div class="team away"><div class="crest">${aT?.name?.charAt(0)||'?'}</div><div><div class="team-name">${aT?.name||'Away'}</div><div class="team-form" style="justify-content:flex-end">${dots(aFm.dots)}</div></div></div>
     </div>
   </div>
-  <div class="insight${m.tipType==='avoid'?' av':''}">
-    <div class="insight-lbl">${m.tipType==='avoid'?'⚠️ AVOID SIGNAL':'⚡ Model Intelligence'}</div>
+  <div class="insight${m.isHighVariance?' av':''}">
+    <div class="insight-lbl">${m.isHighVariance?'⚠️ LOW CONFIDENCE':'⚡ Model Intelligence'}</div>
     <div class="insight-txt">${insight}</div>
   </div>
   <div class="pred-row">
-    <div><div class="tip-lbl">${m.tipType==='avoid'?'Verdict':'Value Tip'}</div><div class="tip-val ${m.tipType==='avoid'?'tv-red':'tv-gold'}">${m.main}</div></div>
+    <div><div class="tip-lbl">Value Tip</div><div class="tip-val tv-gold">${m.main}</div></div>
     ${m.safe?`<div><div class="tip-lbl">Safe Tip</div><div class="tip-val tv-grn">${m.safe}</div></div>`:''}
     <div class="conf-block"><div class="tip-lbl">Confidence</div><div class="conf-n">${m.conf}%</div><div class="conf-bar-w"><div class="conf-bar ${m.confClass}" style="width:${m.conf}%"></div></div></div>
   </div>
-  ${m.tipType!=='avoid'?`<div class="odds-row"><div class="obt sel"><div class="ol">Home</div><div class="on">—</div></div><div class="obt"><div class="ol">Draw</div><div class="on">—</div></div><div class="obt"><div class="ol">Away</div><div class="on">—</div></div><div class="obt"><div class="ol">BTTS</div><div class="on">—</div></div><div class="obt"><div class="ol">O2.5</div><div class="on">—</div></div></div>`:''}
+  <div class="odds-row"><div class="obt sel"><div class="ol">Home</div><div class="on">—</div></div><div class="obt"><div class="ol">Draw</div><div class="on">—</div></div><div class="obt"><div class="ol">Away</div><div class="on">—</div></div><div class="obt"><div class="ol">BTTS</div><div class="on">—</div></div><div class="obt"><div class="ol">O2.5</div><div class="on">—</div></div></div>
   <div class="exp-toggle" onclick="toggleExp(this)">
     <div class="etl">📊 Full Analysis — H2H · Last 5 · Stats</div>
     <span class="earr">▾</span>
