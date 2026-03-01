@@ -780,6 +780,7 @@ function runModel(fixture, h2h, homeFm, awayFm){
     over25Signal,bttsSignal,under25Signal,h2hAvgGoals,
     homeResultScore:adjHomeScore,awayResultScore:adjAwayScore,drawScore,
     hMom,aMom,isHighVariance,
+    hName,aName,
     confClass:conf>74?'cb-hi':conf>54?'cb-mid':'cb-lo'
   };
 }
@@ -941,6 +942,81 @@ async function saveTeamMemory(teamId, stats) {
 
 // Get calibration-adjusted confidence
 // If our 70-80% tips are actually hitting 85%, adjust upward (and vice versa)
+// ── ODDS API HELPERS ───────────────────────────────────────────────────────
+
+function normalizeTeamName(name){
+  return (name||'').toLowerCase()
+    .replace(/\s?(fc|cf|sc|ac|rc|us|as|ss|cd|ud|rcd|afc|bfc|1\.)\s?/gi,'')
+    .replace(/united/g,'utd').replace(/&/g,'and')
+    .replace(/[^a-z0-9]/g,'').trim();
+}
+
+function findOddsMatch(oddsMap, homeTeam, awayTeam){
+  const hKey=normalizeTeamName(homeTeam), aKey=normalizeTeamName(awayTeam);
+  const exact=oddsMap[hKey+'_'+aKey];
+  if(exact) return exact;
+  for(const[,match] of Object.entries(oddsMap)){
+    const mh=normalizeTeamName(match.home_team), ma=normalizeTeamName(match.away_team);
+    if((mh.includes(hKey)||hKey.includes(mh))&&(ma.includes(aKey)||aKey.includes(ma)))
+      return match;
+  }
+  return null;
+}
+
+function getBestOdds(oddsMatch, market, outcomeKey){
+  if(!oddsMatch) return null;
+  let best=null;
+  (oddsMatch.bookmakers||[]).forEach(b=>{
+    const mkt=b.markets?.find(m=>m.key===market);
+    const outcome=mkt?.outcomes?.find(o=>o.name?.toLowerCase()===outcomeKey?.toLowerCase());
+    if(outcome?.price&&(!best||outcome.price>best)) best=outcome.price;
+  });
+  return best;
+}
+
+function impliedProb(odds){ return odds?1/odds:null; }
+
+function findBestEdge(modelResult, oddsMatch){
+  if(!oddsMatch) return null;
+  const{pResult,pOver25,pOver15,pBTTS,hLambda,aLambda}=modelResult;
+  const hN=modelResult.hName||'Home', aN=modelResult.aName||'Away';
+  const pOver35=poissonOver(hLambda,aLambda,3.5);
+  const pDNB_h=pResult.hw/(pResult.hw+pResult.aw||1);
+  const pDC_h=pResult.hw+pResult.d, pDC_a=pResult.aw+pResult.d;
+
+  const cands=[
+    {tip:`${hN} Win`,           market:'h2h',          key:'home',       prob:pResult.hw},
+    {tip:'Draw',                market:'h2h',          key:'draw',       prob:pResult.d},
+    {tip:`${aN} Win`,           market:'h2h',          key:'away',       prob:pResult.aw},
+    {tip:'Over 1.5 Goals',      market:'totals',       key:'over 1.5',   prob:pOver15},
+    {tip:'Over 2.5 Goals',      market:'totals',       key:'over 2.5',   prob:pOver25},
+    {tip:'Over 3.5 Goals',      market:'totals',       key:'over 3.5',   prob:pOver35},
+    {tip:'Under 2.5 Goals',     market:'totals',       key:'under 2.5',  prob:1-pOver25},
+    {tip:'Both Teams To Score', market:'btts',         key:'yes',        prob:pBTTS},
+    {tip:'No BTTS',             market:'btts',         key:'no',         prob:1-pBTTS},
+    {tip:`${hN} Win or Draw`,   market:'double_chance',key:'1x',         prob:pDC_h},
+    {tip:`${aN} Win or Draw`,   market:'double_chance',key:'x2',         prob:pDC_a},
+    {tip:`${hN} Draw No Bet`,   market:'draw_no_bet',  key:'home',       prob:pDNB_h},
+    {tip:`${aN} Draw No Bet`,   market:'draw_no_bet',  key:'away',       prob:1-pDNB_h},
+  ];
+
+  let best=null;
+  cands.forEach(c=>{
+    const odds=getBestOdds(oddsMatch,c.market,c.key);
+    if(!odds||odds<1.15) return;
+    const edge=c.prob-impliedProb(odds);
+    if(!best||edge>best.edge) best={
+      tip:c.tip, market:c.market,
+      odds:parseFloat(odds.toFixed(2)),
+      modelProb:Math.round(c.prob*100),
+      impliedProb:Math.round(impliedProb(odds)*100),
+      edge, edgePct:Math.round(edge*100),
+      hasValue:edge>=0.05,
+    };
+  });
+  return best;
+}
+
 function getCalibratedConf(rawConf, tipType) {
   if(!calibrationData?.buckets) return rawConf;
   const bucket = Math.floor(rawConf / 10) * 10;
@@ -1027,9 +1103,22 @@ function renderCard(f,h2h,hFm,aFm,precomputedModel){
     <div class="insight-txt">${insight}</div>
   </div>
   <div class="pred-row">
-    <div><div class="tip-lbl">Value Tip</div><div class="tip-val tv-gold">${m.main}</div></div>
-    ${m.safe?`<div><div class="tip-lbl">Safe Tip</div><div class="tip-val tv-grn">${m.safe}</div></div>`:''}
-    <div class="conf-block"><div class="tip-lbl">Confidence</div><div class="conf-n">${m.conf}%</div><div class="conf-bar-w"><div class="conf-bar ${m.confClass}" style="width:${m.conf}%"></div></div></div>
+    <div>
+      <div class="tip-lbl">Best Tip ${m.hasOdds?'<span style="font-size:.55rem;color:var(--green)">● ODDS MATCHED</span>':'<span style="font-size:.55rem;color:var(--dim)">● NO ODDS</span>'}</div>
+      <div class="tip-val tv-gold">${m.main}</div>
+      ${m.bestOdds?`<div style="margin-top:.3rem;font-size:.72rem;color:var(--dim)">Best odds: <span style="color:var(--gold);font-weight:700;font-family:'Space Mono',monospace">${m.bestOdds}</span></div>`:''}
+    </div>
+    ${m.edgePct!=null?`<div style="text-align:center">
+      <div class="tip-lbl">Edge</div>
+      <div style="font-size:1.4rem;font-weight:800;font-family:'Space Mono',monospace;color:${m.edgePct>=10?'var(--green)':m.edgePct>=5?'var(--gold)':'var(--dim)'}">+${m.edgePct}%</div>
+      <div style="font-size:.6rem;color:var(--dim)">vs implied</div>
+    </div>`:`<div><div class="tip-lbl">Safe Tip</div><div class="tip-val tv-grn">${m.safe||'—'}</div></div>`}
+    <div class="conf-block">
+      <div class="tip-lbl">Confidence</div>
+      <div class="conf-n">${m.conf}%</div>
+      <div class="conf-bar-w"><div class="conf-bar ${m.confClass}" style="width:${m.conf}%"></div></div>
+      ${m.modelProb?`<div style="font-size:.58rem;color:var(--dim);margin-top:.2rem">Model: ${m.modelProb}% · Bookie: ${m.impliedProb||'—'}%</div>`:''}
+    </div>
   </div>
   <div class="odds-row"><div class="obt sel"><div class="ol">Home</div><div class="on">—</div></div><div class="obt"><div class="ol">Draw</div><div class="on">—</div></div><div class="obt"><div class="ol">Away</div><div class="on">—</div></div><div class="obt"><div class="ol">BTTS</div><div class="on">—</div></div><div class="obt"><div class="ol">O2.5</div><div class="on">—</div></div></div>
   <div class="exp-toggle" onclick="toggleExp(this)">
@@ -1093,6 +1182,26 @@ async function loadDate(date){
     document.getElementById('aiBannerTxt').textContent=`Analysing ${fixtures.length} fixtures…`;
     const byLeague={};
     fixtures.forEach(f=>{const ln=f.league?.name||'Other';if(!byLeague[ln])byLeague[ln]=[];byLeague[ln].push(f);});
+
+    // ── Fetch real bookmaker odds for all leagues in parallel ─────────────
+    document.getElementById('aiBannerTxt').textContent='Fetching live odds…';
+    const leagueNames=Object.keys(byLeague).join(',');
+    let oddsMatches=[];
+    try{
+      const oddsResp=await fetch(`/odds/today?leagues=${encodeURIComponent(leagueNames)}`);
+      const oddsData=await oddsResp.json();
+      oddsMatches=oddsData.matches||[];
+      console.log(`[ODDS] Got ${oddsMatches.length} matches with odds`);
+    }catch(e){ console.log('[ODDS] Could not fetch odds:', e.message); }
+
+    // Build odds lookup: normalized "home vs away" → odds object
+    const oddsMap={};
+    oddsMatches.forEach(m=>{
+      const key=normalizeTeamName(m.home_team)+'_'+normalizeTeamName(m.away_team);
+      oddsMap[key]=m;
+    });
+
+    document.getElementById('aiBannerTxt').textContent=`Building predictions…`;
     let html='<div id="topPicksBanner"></div>';
     html+=`<div id="progressWrap" class="load-progress">Analysing 0 / ${fixtures.length} matches…</div><div class="prog-bar-wrap" style="margin:0 0 .8rem"><div class="prog-bar-fill" id="progBar" style="width:0%"></div></div>`;
     for(const[ln,lf]of Object.entries(byLeague)){
@@ -1189,6 +1298,31 @@ async function loadDate(date){
         const calibConf=getCalibratedConf(modelResult.conf,modelResult.tipType);
         modelResult.conf=calibConf;
         modelResult.confClass=calibConf>74?'cb-hi':calibConf>54?'cb-mid':'cb-lo';
+
+        // ── REAL ODDS + VALUE DETECTION ────────────────────────────────────
+        const oddsMatch=findOddsMatch(oddsMap,hT.name,aT.name);
+        const edgeResult=findBestEdge(modelResult,oddsMatch);
+        modelResult.edge=edgeResult;
+        modelResult.hasOdds=!!oddsMatch;
+
+        if(edgeResult?.hasValue){
+          // Genuine edge found — override tip with the value pick
+          modelResult.main=edgeResult.tip;
+          modelResult.bestOdds=edgeResult.odds;
+          modelResult.edgePct=edgeResult.edgePct;
+          modelResult.modelProb=edgeResult.modelProb;
+          modelResult.impliedProb=edgeResult.impliedProb;
+          // Confidence = model probability + edge bonus
+          modelResult.conf=Math.min(Math.round(edgeResult.modelProb+Math.min(edgeResult.edgePct*1.5,18)),89);
+          modelResult.confClass=modelResult.conf>74?'cb-hi':modelResult.conf>54?'cb-mid':'cb-lo';
+          modelResult.tipType='val';
+          modelResult.badgeClass='val';
+          modelResult.badges=['💎 VALUE'];
+        } else if(edgeResult&&!edgeResult.hasValue){
+          // Odds exist but no genuine edge — this is a bookmaker trap
+          modelResult.badges=[...modelResult.badges,'⚠️ LOW EDGE'];
+          modelResult.noValueFound=true;
+        }
 
         allModels.push({f,modelResult,hT,aT});
 
