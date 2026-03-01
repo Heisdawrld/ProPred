@@ -602,17 +602,29 @@ function runModel(fixture, h2h, homeFm, awayFm){
     ? h2hCompleted.filter(m=>(getGoals(m.scores,'home')??0)>0&&(getGoals(m.scores,'away')??0)>0).length/h2hCompleted.length
     : null;
 
-  // ── POISSON λ ESTIMATES ───────────────────────────────────────────────
-  // Use home/away specific stats when available, blend with recency-weighted overall
-  const hAttack  = hSt ? (hSt.homeAvgScored??hSt.wAvgScored)*0.6 + hSt.wAvgScored*0.4 : 1.3;
-  const hDefence = hSt ? (hSt.homeAvgConceded??hSt.wAvgConceded)*0.6 + hSt.wAvgConceded*0.4 : 1.1;
-  const aAttack  = aSt ? (aSt.awayAvgScored??aSt.wAvgScored)*0.6 + aSt.wAvgScored*0.4 : 1.0;
-  const aDefence = aSt ? (aSt.awayAvgConceded??aSt.wAvgConceded)*0.6 + aSt.wAvgConceded*0.4 : 1.2;
-
-  // League average goals/game ~1.35 per team as prior
+  // ── POISSON λ — Dixon-Coles multiplicative ────────────────────────────
+  // λ = attackStrength × defenceWeakness × leagueAvg
+  // This properly amplifies good attacks vs bad defences
+  // rather than pulling everything toward the league average
   const leagueAvg = 1.35;
-  const hLambda = (hAttack + aDefence + leagueAvg) / 3;
-  const aLambda = (aAttack + hDefence + leagueAvg) / 3;
+
+  // Use home-specific stats where available (home/away splits matter a lot)
+  const hScoringAvg  = hSt ? (hSt.homeAvgScored   ?? hSt.wAvgScored)   : leagueAvg;
+  const hConcAvg     = hSt ? (hSt.homeAvgConceded  ?? hSt.wAvgConceded) : leagueAvg;
+  const aScoringAvg  = aSt ? (aSt.awayAvgScored    ?? aSt.wAvgScored)   : leagueAvg;
+  const aConcAvg     = aSt ? (aSt.awayAvgConceded  ?? aSt.wAvgConceded) : leagueAvg;
+
+  // Attack & defence strengths relative to league average
+  const hAttackStr = hScoringAvg / leagueAvg;   // >1 = strong attack
+  const hDefStr    = hConcAvg    / leagueAvg;   // >1 = leaky defence
+  const aAttackStr = aScoringAvg / leagueAvg;
+  const aDefStr    = aConcAvg    / leagueAvg;
+
+  // Expected goals per team this match (Dixon-Coles)
+  // hLambda = home attack strength × away defence weakness × league avg
+  // Clamp to [0.4, 3.5] to avoid Poisson edge cases
+  const hLambda = Math.min(Math.max(hAttackStr * aDefStr * leagueAvg, 0.4), 3.5);
+  const aLambda = Math.min(Math.max(aAttackStr * hDefStr * leagueAvg, 0.4), 3.5);
 
   // Poisson probabilities
   const pResult  = poissonResult(hLambda, aLambda);
@@ -623,80 +635,87 @@ function runModel(fixture, h2h, homeFm, awayFm){
   const expectedGoals = hLambda + aLambda;
 
   // ── BLEND POISSON WITH HISTORICAL SIGNALS ────────────────────────────
-  // Poisson is theoretically pure but historical rates add real-world noise
-  const homeResultScore = pResult.hw*0.5 + h2hHomeRate*0.2 + (hSt?.winRate||0.3)*0.2 + hFS*0.1;
-  const awayResultScore = pResult.aw*0.5 + h2hAwayRate*0.2 + (aSt?.winRate||0.25)*0.2 + aFS*0.1;
-  const drawScore       = pResult.d*0.5  + h2hDrawRate*0.25 + (hSt?.drawRate||0.2)*0.125 + (aSt?.drawRate||0.2)*0.125;
+  // Note: pResult.hw for even match is ~0.37, strong home ~0.55+
+  // All thresholds must reflect real football probability ranges
+  const homeResultScore = pResult.hw*0.5 + h2hHomeRate*0.2 + (hSt?.winRate||0.35)*0.2 + hFS*0.1;
+  const awayResultScore = pResult.aw*0.5 + h2hAwayRate*0.2 + (aSt?.winRate||0.30)*0.2 + aFS*0.1;
+  const drawScore       = pResult.d*0.5  + h2hDrawRate*0.25 + (hSt?.drawRate||0.22)*0.125 + (aSt?.drawRate||0.22)*0.125;
 
-  const over25Signal = pOver25*0.5 + (hSt?.over25Rate??0.5)*0.2 + (aSt?.over25Rate??0.5)*0.2
-                     + (h2hAvgGoals!==null?(h2hAvgGoals>2.5?0.1:0):0.05);
-  const under25Signal= (1-pOver25)*0.5 + (hSt?.csRate??0.2)*0.2 + (aSt?.csRate??0.2)*0.15
+  const over25Signal = pOver25*0.45 + (hSt?.over25Rate??0.48)*0.2 + (aSt?.over25Rate??0.48)*0.2
+                     + (h2hAvgGoals!==null?(h2hAvgGoals>2.5?0.12:h2hAvgGoals<2?-0.05:0.04):0.05)
+                     + (expectedGoals>2.8?0.08:0);
+  const under25Signal= (1-pOver25)*0.45 + (hSt?.csRate??0.22)*0.2 + (aSt?.csRate??0.22)*0.15
                      + (h2hAvgGoals!==null?(h2hAvgGoals<2?0.15:0):0.05);
-  const bttsSignal   = pBTTS*0.5 + (hSt?.bttsRate??0.5)*0.2 + (aSt?.bttsRate??0.2)*0.2
-                     + (h2hBtts!==null?h2hBtts*0.1:0.05);
+  const bttsSignal   = pBTTS*0.45 + (hSt?.bttsRate??0.48)*0.2 + (aSt?.bttsRate??0.48)*0.2
+                     + (h2hBtts!==null?h2hBtts*0.1:0.05)
+                     + (hLambda>1.3&&aLambda>1.0?0.05:0);
   const nbttsSignal  = (1-pBTTS)*0.45 + (hSt?.csRate??0.25)*0.25 + (aSt?.ftsRate??0.2)*0.2
                      + (h2hBtts!==null?(1-h2hBtts)*0.1:0.05);
 
   // ── MOMENTUM ADJUSTMENT ───────────────────────────────────────────────
   const hMom = hSt?.momentum ?? 0;
   const aMom = aSt?.momentum ?? 0;
-  const homeBoost = hMom*0.03 - aMom*0.015; // positive = home improving, away declining
-  const awayBoost = aMom*0.03 - hMom*0.015;
+  const homeBoost = hMom*0.025 - aMom*0.01;
+  const awayBoost = aMom*0.025 - hMom*0.01;
 
-  const adjHomeScore = Math.min(homeResultScore + homeBoost, 0.95);
-  const adjAwayScore = Math.min(awayResultScore + awayBoost, 0.90);
+  const adjHomeScore = Math.min(homeResultScore + homeBoost, 0.92);
+  const adjAwayScore = Math.min(awayResultScore + awayBoost, 0.88);
 
   // ── CANDIDATE TIPS ────────────────────────────────────────────────────
+  // Thresholds calibrated to real football:
+  // - Even match: homeWin ~0.37, awayWin ~0.33, draw ~0.28
+  // - Clear home favourite: homeWin ~0.52-0.62
+  // - Strong home: homeWin ~0.62+
   const candidates = [];
   const hName=homeT?.name||'Home', aName=awayT?.name||'Away';
   const hS=hName.split(' ').slice(-1)[0], aS=aName.split(' ').slice(-1)[0];
 
-  // Result
-  if(adjHomeScore>0.5)
+  // Result tips — thresholds relative to actual Poisson ranges
+  if(adjHomeScore>0.40)   // home is even slight favourite
     candidates.push({tip:`${hName} Win`,safe:`${hS} Draw No Bet`,score:adjHomeScore,type:'result'});
-  if(adjHomeScore>0.45&&drawScore>0.18)
-    candidates.push({tip:`${hName} Win or Draw`,safe:`${hS} Double Chance`,score:(adjHomeScore+drawScore)*0.6,type:'result'});
-  if(adjAwayScore>0.42)
+  if(adjHomeScore>0.36&&drawScore>0.20)
+    candidates.push({tip:`${hName} Win or Draw`,safe:`${hS} Double Chance`,score:(adjHomeScore+drawScore)*0.62,type:'result'});
+  if(adjAwayScore>0.35)   // away team has genuine chance
     candidates.push({tip:`${aName} Win`,safe:`${aS} Draw No Bet`,score:adjAwayScore,type:'result'});
-  if(adjAwayScore>0.38&&drawScore>0.2)
-    candidates.push({tip:`${aName} Win or Draw`,safe:`${aS} Double Chance`,score:(adjAwayScore+drawScore)*0.58,type:'result'});
-  if(drawScore>0.26)
+  if(adjAwayScore>0.32&&drawScore>0.22)
+    candidates.push({tip:`${aName} Win or Draw`,safe:`${aS} Double Chance`,score:(adjAwayScore+drawScore)*0.60,type:'result'});
+  if(drawScore>0.28)
     candidates.push({tip:'Draw',safe:'Both Teams To Score',score:drawScore,type:'draw'});
 
-  // AH when dominant
-  if(adjHomeScore>0.62)
-    candidates.push({tip:`${hS} -0.5 Asian Handicap`,safe:`${hName} Win`,score:adjHomeScore*0.92,type:'ah'});
-  if(adjAwayScore>0.55)
-    candidates.push({tip:`${aS} -0.5 Asian Handicap`,safe:`${aName} Win`,score:adjAwayScore*0.88,type:'ah'});
+  // AH when clearly dominant (home win > 0.52 = real favourite)
+  if(adjHomeScore>0.52)
+    candidates.push({tip:`${hS} -0.5 Asian Handicap`,safe:`${hName} Win`,score:adjHomeScore*0.93,type:'ah'});
+  if(adjAwayScore>0.47)
+    candidates.push({tip:`${aS} -0.5 Asian Handicap`,safe:`${aName} Win`,score:adjAwayScore*0.90,type:'ah'});
 
   // Combo (result + goals)
-  if(adjHomeScore>0.5&&bttsSignal>0.5)
+  if(adjHomeScore>0.42&&bttsSignal>0.48)
     candidates.push({tip:`${hName} Win & BTTS`,safe:`${hName} Win`,score:(adjHomeScore*0.55+bttsSignal*0.45),type:'combo'});
-  if(adjHomeScore>0.5&&over25Signal>0.55)
+  if(adjHomeScore>0.44&&over25Signal>0.50)
     candidates.push({tip:`${hName} Win & Over 2.5`,safe:`Over 2.5 Goals`,score:(adjHomeScore*0.5+over25Signal*0.5),type:'combo'});
-  if(adjAwayScore>0.44&&bttsSignal>0.52)
+  if(adjAwayScore>0.38&&bttsSignal>0.50)
     candidates.push({tip:`${aName} Win & BTTS`,safe:`${aName} Win`,score:(adjAwayScore*0.55+bttsSignal*0.45),type:'combo'});
 
   // Goals markets
-  if(over25Signal>0.52)
+  if(over25Signal>0.45)
     candidates.push({tip:'Over 2.5 Goals',safe:'Over 1.5 Goals',score:over25Signal,type:'goals'});
-  if(over25Signal>0.65)
-    candidates.push({tip:'Over 3.5 Goals',safe:'Over 2.5 Goals',score:over25Signal*0.75,type:'goals'});
-  if(under25Signal>0.58&&over25Signal<0.4)
+  if(over25Signal>0.60)
+    candidates.push({tip:'Over 3.5 Goals',safe:'Over 2.5 Goals',score:over25Signal*0.78,type:'goals'});
+  if(under25Signal>0.52&&over25Signal<0.38)
     candidates.push({tip:'Under 2.5 Goals',safe:'Under 3.5 Goals',score:under25Signal,type:'goals'});
-  if(bttsSignal>0.55)
+  if(bttsSignal>0.50)
     candidates.push({tip:'Both Teams To Score',safe:'Over 1.5 Goals',score:bttsSignal,type:'goals'});
-  if(nbttsSignal>0.58&&bttsSignal<0.42)
+  if(nbttsSignal>0.55&&bttsSignal<0.40)
     candidates.push({tip:'No — BTTS',safe:`${hS} Clean Sheet`,score:nbttsSignal,type:'goals'});
 
-  // Scoring streak bonus tip
+  // Scoring streak bonus
   if(hSt?.scoringStreak>=4)
-    candidates.push({tip:`${hName} To Score`,safe:`${hName} Win or Draw`,score:0.82,type:'goals'});
+    candidates.push({tip:`${hName} To Score`,safe:`${hName} Win or Draw`,score:0.78,type:'goals'});
   if(aSt?.scoringStreak>=4)
-    candidates.push({tip:`${aName} To Score`,safe:'Both Teams To Score',score:0.78,type:'goals'});
+    candidates.push({tip:`${aName} To Score`,safe:'Both Teams To Score',score:0.74,type:'goals'});
 
-  // Fallback
-  candidates.push({tip:'Over 1.5 Goals',safe:`${hS} Double Chance`,score:pOver15*0.7,type:'goals'});
+  // Over 1.5 only as true last resort
+  candidates.push({tip:'Over 1.5 Goals',safe:`${hS} Double Chance`,score:pOver15*0.55,type:'goals'});
 
   candidates.sort((a,b)=>b.score-a.score);
   const best     = candidates[0];
