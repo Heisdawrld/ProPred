@@ -364,6 +364,7 @@ input[type=date]::-webkit-calendar-picker-indicator{filter:invert(1) opacity(.4)
       <div class="api-stat"><div class="api-dot" id="d3" style="background:var(--green)"></div>Team Form Tracker</div>
       <div class="api-stat"><div class="api-dot" id="d4" style="background:var(--purple)"></div>Team Memory DB</div>
       <div class="api-stat"><div class="api-dot" id="d5" style="background:var(--gold)"></div>Prediction Tracker</div>
+      <div class="api-stat"><div class="api-dot" id="d6" style="background:#00bfff"></div>Odds API <span id="oddsQuotaLabel" style="font-size:.6rem;color:var(--dim);margin-left:.3rem"></span></div>
     </div>
   </div>
 </div>
@@ -836,13 +837,22 @@ let calibrationData = null;
 // Load calibration + track record on page start
 async function loadLearningData() {
   try {
-    const [calibResp, resultsResp, healthResp] = await Promise.all([
+    const [calibResp, resultsResp, healthResp, quotaResp] = await Promise.all([
       fetch('/calibration').then(r=>r.json()).catch(()=>null),
       fetch('/predictions/results?limit=15').then(r=>r.json()).catch(()=>[]),
       fetch('/health').then(r=>r.json()).catch(()=>null),
+      fetch('/odds/quota').then(r=>r.json()).catch(()=>null),
     ]);
 
     calibrationData = calibResp;
+
+    // Update Odds API quota display
+    if(quotaResp?.remaining!=null){
+      const ql=document.getElementById('oddsQuotaLabel');
+      const d6=document.getElementById('d6');
+      if(ql) ql.textContent=`${quotaResp.remaining} credits left`;
+      if(d6) d6.style.background= quotaResp.remaining>50?'#00bfff':quotaResp.remaining>10?'var(--gold)':'var(--red)';
+    }
 
     // Update stats bar
     if(calibResp?.overall?.rate!=null){
@@ -946,73 +956,104 @@ async function saveTeamMemory(teamId, stats) {
 
 function normalizeTeamName(name){
   return (name||'').toLowerCase()
-    .replace(/\s?(fc|cf|sc|ac|rc|us|as|ss|cd|ud|rcd|afc|bfc|1\.)\s?/gi,'')
-    .replace(/united/g,'utd').replace(/&/g,'and')
-    .replace(/[^a-z0-9]/g,'').trim();
+    .replace(/\bfc\b|\baf\b|\bsc\b|\bac\b|\brc\b|\bus\b|\bas\b|\bss\b|\bcd\b|\bud\b|\bafc\b|\bbfc\b/g,'')
+    .replace(/united/g,'utd')
+    .replace(/\bhotspur\b/g,'')
+    .replace(/\bcity\b/g,'city')
+    .replace(/&/g,'and')
+    .replace(/[^a-z0-9]/g,' ')
+    .replace(/\s+/g,' ')
+    .trim();
+}
+
+function teamNamesMatch(a, b){
+  const na=normalizeTeamName(a), nb=normalizeTeamName(b);
+  if(na===nb) return true;
+  // One contains the other (handles "Man City" vs "Manchester City")
+  if(na.length>3&&nb.includes(na)) return true;
+  if(nb.length>3&&na.includes(nb)) return true;
+  // First word match for short names (handles "Ajax" vs "Ajax Amsterdam")
+  const wa=na.split(' ')[0], wb=nb.split(' ')[0];
+  if(wa.length>4&&wa===wb) return true;
+  return false;
 }
 
 function findOddsMatch(oddsMap, homeTeam, awayTeam){
+  // Try exact normalized key first
   const hKey=normalizeTeamName(homeTeam), aKey=normalizeTeamName(awayTeam);
-  const exact=oddsMap[hKey+'_'+aKey];
-  if(exact) return exact;
-  for(const[,match] of Object.entries(oddsMap)){
-    const mh=normalizeTeamName(match.home_team), ma=normalizeTeamName(match.away_team);
-    if((mh.includes(hKey)||hKey.includes(mh))&&(ma.includes(aKey)||aKey.includes(ma)))
+  const exactKey=hKey+'_'+aKey;
+  if(oddsMap[exactKey]) return oddsMap[exactKey];
+
+  // Fuzzy scan through all odds matches
+  for(const match of Object.values(oddsMap)){
+    if(teamNamesMatch(match.home_team, homeTeam) &&
+       teamNamesMatch(match.away_team, awayTeam)){
       return match;
+    }
   }
   return null;
 }
 
-function getBestOdds(oddsMatch, market, outcomeKey){
+function impliedProb(odds){ return odds ? 1/odds : null; }
+
+// Get best decimal odds across all bookmakers for a market + outcome name
+// The Odds API uses team names for h2h outcomes, "Over X.5"/"Under X.5" for totals
+function getBestOdds(oddsMatch, marketKey, outcomeName){
   if(!oddsMatch) return null;
   let best=null;
   (oddsMatch.bookmakers||[]).forEach(b=>{
-    const mkt=b.markets?.find(m=>m.key===market);
-    const outcome=mkt?.outcomes?.find(o=>o.name?.toLowerCase()===outcomeKey?.toLowerCase());
-    if(outcome?.price&&(!best||outcome.price>best)) best=outcome.price;
+    const mkt=b.markets?.find(m=>m.key===marketKey);
+    if(!mkt) return;
+    const outcome=mkt.outcomes?.find(o=>
+      o.name?.toLowerCase().trim()===outcomeName?.toLowerCase().trim()
+    );
+    if(outcome?.price && (!best||outcome.price>best)) best=outcome.price;
   });
   return best;
 }
 
-function impliedProb(odds){ return odds?1/odds:null; }
-
+// Find the best value edge across all available markets for a fixture
+// Odds API confirmed markets: h2h (team names), totals ("Over X.5"/"Under X.5")
 function findBestEdge(modelResult, oddsMatch){
   if(!oddsMatch) return null;
   const{pResult,pOver25,pOver15,pBTTS,hLambda,aLambda}=modelResult;
-  const hN=modelResult.hName||'Home', aN=modelResult.aName||'Away';
   const pOver35=poissonOver(hLambda,aLambda,3.5);
-  const pDNB_h=pResult.hw/(pResult.hw+pResult.aw||1);
-  const pDC_h=pResult.hw+pResult.d, pDC_a=pResult.aw+pResult.d;
+
+  // Get exact team names from the odds match (Odds API uses their own naming)
+  const oddsHome = oddsMatch.home_team;
+  const oddsAway = oddsMatch.away_team;
 
   const cands=[
-    {tip:`${hN} Win`,           market:'h2h',          key:'home',       prob:pResult.hw},
-    {tip:'Draw',                market:'h2h',          key:'draw',       prob:pResult.d},
-    {tip:`${aN} Win`,           market:'h2h',          key:'away',       prob:pResult.aw},
-    {tip:'Over 1.5 Goals',      market:'totals',       key:'over 1.5',   prob:pOver15},
-    {tip:'Over 2.5 Goals',      market:'totals',       key:'over 2.5',   prob:pOver25},
-    {tip:'Over 3.5 Goals',      market:'totals',       key:'over 3.5',   prob:pOver35},
-    {tip:'Under 2.5 Goals',     market:'totals',       key:'under 2.5',  prob:1-pOver25},
-    {tip:'Both Teams To Score', market:'btts',         key:'yes',        prob:pBTTS},
-    {tip:'No BTTS',             market:'btts',         key:'no',         prob:1-pBTTS},
-    {tip:`${hN} Win or Draw`,   market:'double_chance',key:'1x',         prob:pDC_h},
-    {tip:`${aN} Win or Draw`,   market:'double_chance',key:'x2',         prob:pDC_a},
-    {tip:`${hN} Draw No Bet`,   market:'draw_no_bet',  key:'home',       prob:pDNB_h},
-    {tip:`${aN} Draw No Bet`,   market:'draw_no_bet',  key:'away',       prob:1-pDNB_h},
+    // h2h — outcome names ARE the team names (or "Draw")
+    {tip:`${oddsHome} Win`,  market:'h2h',    key:oddsHome,    prob:pResult.hw, label:`${modelResult.hName||oddsHome} Win`},
+    {tip:'Draw',             market:'h2h',    key:'Draw',      prob:pResult.d,  label:'Draw'},
+    {tip:`${oddsAway} Win`,  market:'h2h',    key:oddsAway,    prob:pResult.aw, label:`${modelResult.aName||oddsAway} Win`},
+    // totals — "Over 1.5", "Over 2.5", "Over 3.5", "Under 2.5"
+    {tip:'Over 1.5 Goals',   market:'totals', key:'Over 1.5',  prob:pOver15,   label:'Over 1.5 Goals'},
+    {tip:'Over 2.5 Goals',   market:'totals', key:'Over 2.5',  prob:pOver25,   label:'Over 2.5 Goals'},
+    {tip:'Over 3.5 Goals',   market:'totals', key:'Over 3.5',  prob:pOver35,   label:'Over 3.5 Goals'},
+    {tip:'Under 2.5 Goals',  market:'totals', key:'Under 2.5', prob:1-pOver25, label:'Under 2.5 Goals'},
+    {tip:'Under 3.5 Goals',  market:'totals', key:'Under 3.5', prob:1-pOver35, label:'Under 3.5 Goals'},
   ];
 
   let best=null;
   cands.forEach(c=>{
-    const odds=getBestOdds(oddsMatch,c.market,c.key);
-    if(!odds||odds<1.15) return;
-    const edge=c.prob-impliedProb(odds);
-    if(!best||edge>best.edge) best={
-      tip:c.tip, market:c.market,
-      odds:parseFloat(odds.toFixed(2)),
-      modelProb:Math.round(c.prob*100),
-      impliedProb:Math.round(impliedProb(odds)*100),
-      edge, edgePct:Math.round(edge*100),
-      hasValue:edge>=0.05,
-    };
+    const odds=getBestOdds(oddsMatch, c.market, c.key);
+    if(!odds||odds<1.12) return; // ignore very short odds — no value possible
+    const imp=impliedProb(odds);
+    const edge=c.prob-imp;
+    if(!best||edge>best.edge){
+      best={
+        tip:        c.label,       // display name using Sportmonks team name
+        market:     c.market,
+        odds:       parseFloat(odds.toFixed(2)),
+        modelProb:  Math.round(c.prob*100),
+        impliedProb:Math.round(imp*100),
+        edge,
+        edgePct:    Math.round(edge*100),
+        hasValue:   edge>=0.05,    // 5%+ edge = genuine value
+      };
+    }
   });
   return best;
 }
@@ -1194,12 +1235,13 @@ async function loadDate(date){
       console.log(`[ODDS] Got ${oddsMatches.length} matches with odds`);
     }catch(e){ console.log('[ODDS] Could not fetch odds:', e.message); }
 
-    // Build odds lookup: normalized "home vs away" → odds object
+    // Build odds lookup map: normalizedHome_normalizedAway → odds object
     const oddsMap={};
     oddsMatches.forEach(m=>{
       const key=normalizeTeamName(m.home_team)+'_'+normalizeTeamName(m.away_team);
       oddsMap[key]=m;
     });
+    console.log(`[ODDS] Built map with ${Object.keys(oddsMap).length} entries`);
 
     document.getElementById('aiBannerTxt').textContent=`Building predictions…`;
     let html='<div id="topPicksBanner"></div>';
