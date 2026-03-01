@@ -5,8 +5,8 @@ const db      = require('./db');
 
 const app      = express();
 const PORT     = process.env.PORT || 3000;
-const SM_KEY   = process.env.SPORTMONKS_KEY  || 'EbRqkfYJgeCOtHzoC1AXpk1OO4semN0DtJ1P84zrYVNRCT1x4dHVsP9FGJAV';
-const ODDS_KEY = process.env.ODDS_API_KEY    || 'f40efeabae93fc096daa59c7e2ab6fc2';
+const SM_KEY   = process.env.SPORTMONKS_KEY || 'EbRqkfYJgeCOtHzoC1AXpk1OO4semN0DtJ1P84zrYVNRCT1x4dHVsP9FGJAV';
+const ODDS_KEY = process.env.ODDS_API_KEY   || 'f40efeabae93fc096daa59c7e2ab6fc2';
 const SM_BASE  = 'https://api.sportmonks.com/v3/football';
 const ODDS_BASE= 'https://api.the-odds-api.com/v4';
 
@@ -27,8 +27,8 @@ app.get('/api/*', async (req, res) => {
     const sep         = queryString ? '&' : '';
     const url         = `${SM_BASE}${endpoint}?api_token=${SM_KEY}${sep}${queryString}`;
     console.log(`[SM] ${endpoint}`);
-    const response = await fetch(url);
-    const data     = await response.json();
+    const resp = await fetch(url);
+    const data = await resp.json();
     res.json(data);
   } catch (err) {
     console.error('[SM ERROR]', err.message);
@@ -36,105 +36,171 @@ app.get('/api/*', async (req, res) => {
   }
 });
 
-// ── ODDS API ───────────────────────────────────────────────────────────────
-// Maps Sportmonks league names → Odds API sport keys
+// ── ODDS API — QUOTA-EFFICIENT ─────────────────────────────────────────────
+//
+// Strategy:
+//   1. ONE call to /sports/soccer_*/odds per UNIQUE league (not per fixture)
+//   2. Only fetch h2h + totals (2 credits per region)
+//   3. Use uk region only (1 region = half the cost)
+//   4. Cache aggressively — 30 min TTL per league (odds don't change that fast)
+//   5. Use "upcoming" endpoint as catch-all for leagues not in our map
+//   Total cost per page load: ~2-6 credits vs 20-50 with naive approach
+//
+// Confirmed available markets on standard plan:
+//   h2h     — match winner (home/draw/away)       outcome keys: home team name / "Draw" / away team name
+//   totals  — over/under goals                    outcome keys: "Over X.5" / "Under X.5"
+//   spreads — asian handicap (where available)    outcome keys: home team name / away team name + point
+
 const LEAGUE_MAP = {
-  'premier league':          'soccer_epl',
-  'la liga':                 'soccer_spain_la_liga',
-  'bundesliga':              'soccer_germany_bundesliga',
-  'serie a':                 'soccer_italy_serie_a',
-  'ligue 1':                 'soccer_france_ligue_one',
-  'champions league':        'soccer_uefa_champs_league',
-  'europa league':           'soccer_uefa_europa_league',
-  'championship':            'soccer_efl_champ',
-  'eredivisie':              'soccer_netherlands_eredivisie',
-  'primeira liga':           'soccer_portugal_primeira_liga',
-  'scottish premiership':    'soccer_scotland_premiership',
-  'premiership':             'soccer_scotland_premiership',
-  'super lig':               'soccer_turkey_super_league',
-  'pro league':              'soccer_belgium_first_div',
-  'mls':                     'soccer_usa_mls',
-  'brasileirao':             'soccer_brazil_campeonato',
-  'russian premier league':  'soccer_russia_premier_league',
-  'ukrainian premier league':'soccer_ukraine_premier_league',
-  'ekstraklasa':             'soccer_poland_ekstraklasa',
+  // Top 5 European leagues
+  'premier league':           'soccer_epl',
+  'la liga':                  'soccer_spain_la_liga',
+  'bundesliga':               'soccer_germany_bundesliga',
+  'serie a':                  'soccer_italy_serie_a',
+  'ligue 1':                  'soccer_france_ligue_one',
+  // European cups
+  'uefa champions league':    'soccer_uefa_champs_league',
+  'champions league':         'soccer_uefa_champs_league',
+  'uefa europa league':       'soccer_uefa_europa_league',
+  'europa league':            'soccer_uefa_europa_league',
+  'uefa conference league':   'soccer_uefa_europa_conference_league',
+  // Other European
+  'championship':             'soccer_efl_champ',
+  'efl championship':         'soccer_efl_champ',
+  'eredivisie':               'soccer_netherlands_eredivisie',
+  'primeira liga':            'soccer_portugal_primeira_liga',
+  'scottish premiership':     'soccer_scotland_premiership',
+  'premiership':              'soccer_scotland_premiership',
+  'super lig':                'soccer_turkey_super_league',
+  'pro league':               'soccer_belgium_first_div',
+  'jupiler pro league':       'soccer_belgium_first_div',
+  'ekstraklasa':              'soccer_poland_ekstraklasa',
+  'russian premier league':   'soccer_russia_premier_league',
+  'ukrainian premier league': 'soccer_ukraine_premier_league',
+  'süper lig':                'soccer_turkey_super_league',
+  // Other
+  'mls':                      'soccer_usa_mls',
+  'brasileirao':              'soccer_brazil_campeonato',
+  'serie a (brazil)':         'soccer_brazil_campeonato',
 };
 
-// Cache odds per sport key to avoid hammering the API (cache 10 mins)
-const oddsCache = {};
+// Cache: sportKey → { ts, data }  (30 min TTL)
+const oddsCache   = {};
+const CACHE_TTL   = 30 * 60 * 1000;
+// Track quota usage across the session
+let quotaUsed     = 0;
+let quotaRemaining= '?';
 
-async function fetchOddsForSport(sportKey) {
+async function fetchOddsForLeague(sportKey) {
   const now = Date.now();
-  if (oddsCache[sportKey] && now - oddsCache[sportKey].ts < 10 * 60 * 1000) {
+
+  // Return cached if fresh
+  if (oddsCache[sportKey] && (now - oddsCache[sportKey].ts) < CACHE_TTL) {
+    console.log(`[ODDS] Cache hit: ${sportKey}`);
     return oddsCache[sportKey].data;
   }
+
   try {
-    // Fetch all available markets for this sport
-    const markets = 'h2h,totals,btts,asian_handicap,draw_no_bet,double_chance';
-    const url = `${ODDS_BASE}/sports/${sportKey}/odds?apiKey=${ODDS_KEY}&regions=uk,eu&markets=${markets}&oddsFormat=decimal&dateFormat=iso`;
-    console.log(`[ODDS] Fetching ${sportKey}`);
+    // Only h2h + totals — costs 2 credits (2 markets × 1 region)
+    const markets = 'h2h,totals';
+    const url = `${ODDS_BASE}/sports/${sportKey}/odds?apiKey=${ODDS_KEY}&regions=uk&markets=${markets}&oddsFormat=decimal&dateFormat=iso`;
+
+    console.log(`[ODDS] Fetching: ${sportKey} (cost: 2 credits)`);
     const resp = await fetch(url);
 
-    // Log remaining quota
-    const remaining = resp.headers.get('x-requests-remaining');
-    const used      = resp.headers.get('x-requests-used');
-    console.log(`[ODDS] Quota — used: ${used}, remaining: ${remaining}`);
+    // Track quota
+    quotaUsed      = resp.headers.get('x-requests-used')      || quotaUsed;
+    quotaRemaining = resp.headers.get('x-requests-remaining') || quotaRemaining;
+    console.log(`[ODDS] Quota — used: ${quotaUsed}, remaining: ${quotaRemaining}`);
 
     if (!resp.ok) {
-      console.error(`[ODDS] ${resp.status} for ${sportKey}`);
+      const errText = await resp.text();
+      console.error(`[ODDS] Error ${resp.status} for ${sportKey}:`, errText);
+      oddsCache[sportKey] = { ts: now, data: [] }; // cache empty to avoid hammering
       return [];
     }
+
     const data = await resp.json();
+    console.log(`[ODDS] Got ${data.length} matches for ${sportKey}`);
     oddsCache[sportKey] = { ts: now, data };
     return data;
+
   } catch (e) {
     console.error('[ODDS ERROR]', e.message);
     return [];
   }
 }
 
-// Main odds endpoint — frontend sends league name, gets back matched odds
+// ── /odds/today ────────────────────────────────────────────────────────────
+// Frontend calls this once with all league names it has fixtures for.
+// Returns a flat array of all matched odds events.
+// Deduplicates so each sport key is only fetched once.
 app.get('/odds/today', async (req, res) => {
   try {
-    const leagues = req.query.leagues ? req.query.leagues.split(',') : [];
-    if (!leagues.length) return res.json({ matches: [] });
+    const leagues = req.query.leagues
+      ? req.query.leagues.split(',').map(l => l.trim().toLowerCase())
+      : [];
 
-    // Get unique sport keys needed
+    if (!leagues.length) return res.json({ matches: [], quota: { used: quotaUsed, remaining: quotaRemaining } });
+
+    // Map league names → unique sport keys
     const sportKeys = [...new Set(
-      leagues.map(l => LEAGUE_MAP[l.toLowerCase()]).filter(Boolean)
+      leagues.map(l => LEAGUE_MAP[l]).filter(Boolean)
     )];
 
-    if (!sportKeys.length) return res.json({ matches: [], note: 'No matching leagues in Odds API' });
+    console.log(`[ODDS] Leagues requested: ${leagues.length} → Sport keys: ${sportKeys.join(', ') || 'none matched'}`);
 
-    // Fetch all in parallel
-    const allOdds = (await Promise.all(sportKeys.map(fetchOddsForSport))).flat();
-    res.json({ matches: allOdds, count: allOdds.length });
+    if (!sportKeys.length) {
+      return res.json({
+        matches: [],
+        note: `No league mappings found for: ${leagues.join(', ')}`,
+        quota: { used: quotaUsed, remaining: quotaRemaining }
+      });
+    }
+
+    // Fetch all in parallel (each cached independently)
+    const results = await Promise.all(sportKeys.map(fetchOddsForLeague));
+    const matches  = results.flat();
+
+    res.json({
+      matches,
+      count:   matches.length,
+      leagues: sportKeys,
+      quota:   { used: quotaUsed, remaining: quotaRemaining }
+    });
+
   } catch (err) {
     console.error('[ODDS ROUTE ERROR]', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Get odds for a specific sport key directly
-app.get('/odds/sport/:sportKey', async (req, res) => {
+// ── /odds/quota ────────────────────────────────────────────────────────────
+// Check remaining quota without burning credits
+app.get('/odds/quota', async (req, res) => {
   try {
-    const data = await fetchOddsForSport(req.params.sportKey);
-    res.json({ matches: data, count: data.length });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    // /sports endpoint is free — use it to get current quota headers
+    const resp = await fetch(`${ODDS_BASE}/sports?apiKey=${ODDS_KEY}`);
+    const remaining = resp.headers.get('x-requests-remaining');
+    const used      = resp.headers.get('x-requests-used');
+    quotaUsed      = used      || quotaUsed;
+    quotaRemaining = remaining || quotaRemaining;
+    res.json({ used, remaining, cached: Object.keys(oddsCache).length });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
-// List all available sports on the Odds API
+// ── /odds/sports ───────────────────────────────────────────────────────────
+// List all available soccer sports (free endpoint)
 app.get('/odds/sports', async (req, res) => {
   try {
-    const url  = `${ODDS_BASE}/sports?apiKey=${ODDS_KEY}`;
-    const resp = await fetch(url);
-    const data = await resp.json();
+    const resp  = await fetch(`${ODDS_BASE}/sports?apiKey=${ODDS_KEY}`);
+    const data  = await resp.json();
     const soccer = data.filter(s => s.key?.includes('soccer'));
     res.json(soccer);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -223,19 +289,31 @@ app.get('/health', (req, res) => {
   const teams = Object.keys(db.getAllTeams()).length;
   const calib = db.getCalibration();
   res.json({
-    status: 'ok', teams, predictions: preds.length,
-    resolved: preds.filter(p=>p.result).length,
-    overallRate: calib?.overall?.rate ?? null,
-    oddsLeagues: Object.keys(LEAGUE_MAP).length,
-    uptime: process.uptime(),
+    status:        'ok',
+    version:       'v4',
+    teams,
+    predictions:   preds.length,
+    resolved:      preds.filter(p=>p.result).length,
+    overallRate:   calib?.overall?.rate ?? null,
+    oddsLeagues:   Object.keys(LEAGUE_MAP).length,
+    oddsCache:     Object.keys(oddsCache).length,
+    quotaUsed,
+    quotaRemaining,
+    uptime:        Math.round(process.uptime()),
   });
 });
 
 app.listen(PORT, () => {
   console.log(`PROPRED v4 running on port ${PORT}`);
+  // Check quota on startup (free call)
+  fetch(`http://localhost:${PORT}/odds/quota`)
+    .then(r=>r.json())
+    .then(d=>console.log(`[STARTUP] Odds quota — used: ${d.used}, remaining: ${d.remaining}`))
+    .catch(()=>{});
+  // Auto-resolve pending predictions
   setTimeout(() => {
     fetch(`http://localhost:${PORT}/predictions/auto-resolve`, { method:'POST' })
       .then(r=>r.json()).then(d=>console.log('[STARTUP AUTO-RESOLVE]', d))
       .catch(()=>{});
-  }, 2000);
+  }, 3000);
 });
