@@ -1117,13 +1117,28 @@ async function loadDate(date){
         if(!hT||!aT){ done++; return; }
 
         // Fetch Sportmonks data (always needed)
-        // Use ending_before=today to ensure we only get past completed fixtures
-        const today = new Date().toISOString().split('T')[0];
         const[h2hD,hFixD,aFixD]=await Promise.all([
           api(`/fixtures/head-to-head/${hT.id}/${aT.id}?include=participants;scores;state&per_page=10`).then(r=>r.data||[]).catch(()=>[]),
           api(`/teams/${hT.id}/fixtures?per_page=25&sort=-starting_at&include=participants;scores;state`).then(r=>r.data||[]).catch(()=>[]),
           api(`/teams/${aT.id}/fixtures?per_page=25&sort=-starting_at&include=participants;scores;state`).then(r=>r.data||[]).catch(()=>[]),
         ]);
+
+        // DEBUG: Log raw API response for first fixture only
+        if(!window._debugged && hFixD.length>0){
+          window._debugged=true;
+          const sample=hFixD[0];
+          console.group('🔍 PROPRED DEBUG — Team Fixture Sample');
+          console.log('Team:', hT.name, '| Fixture date:', sample.starting_at);
+          console.log('State:', JSON.stringify(sample.state));
+          console.log('Scores array:', JSON.stringify(sample.scores));
+          console.log('isFinished?', isFinished(sample));
+          console.log('getGoals(home):', getGoals(sample.scores,'home'));
+          console.log('getGoals(away):', getGoals(sample.scores,'away'));
+          console.log('Total fixtures returned:', hFixD.length);
+          console.log('Fixtures with state FT:', hFixD.filter(f=>isFinished(f)).length);
+          console.log('Fixtures with any scores:', hFixD.filter(f=>(f.scores||[]).length>0).length);
+          console.groupEnd();
+        }
 
         // Fetch stored team memory (best-effort — never blocks rendering)
         let hMemResp={found:false}, aMemResp={found:false};
