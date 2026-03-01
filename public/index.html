@@ -1053,7 +1053,7 @@ async function loadDate(date){
     const byLeague={};
     fixtures.forEach(f=>{const ln=f.league?.name||'Other';if(!byLeague[ln])byLeague[ln]=[];byLeague[ln].push(f);});
     let html='<div id="topPicksBanner"></div>';
-    html+=`<div id="progressWrap" class="load-progress">Loading 0 / ${fixtures.length} fixtures…<div class="prog-bar-wrap"><div class="prog-bar-fill" id="progBar" style="width:0%"></div></div></div>`;
+    html+=`<div id="progressWrap" class="load-progress">Analysing 0 / ${fixtures.length} matches…</div><div class="prog-bar-wrap" style="margin:0 0 .8rem"><div class="prog-bar-fill" id="progBar" style="width:0%"></div></div>`;
     for(const[ln,lf]of Object.entries(byLeague)){
       html+=`<div class="lg-div"><div class="lg-div-label">⚽ ${ln}</div><div class="lg-div-line"></div></div>`;
       lf.forEach(f=>{html+=`<div id="w${f.id}"><div class="loader" style="padding:1.5rem"><div class="spinner" style="width:22px;height:22px"></div></div></div>`;});
@@ -1062,106 +1062,102 @@ async function loadDate(date){
     document.getElementById('filterRow').style.display='flex';
     document.getElementById('aiBanner').style.display='none';
 
-    // ── STEP 1: Auto-resolve any pending predictions from past dates ──────
+    // ── Auto-resolve any pending predictions from past dates ──────────────
     fetch('/predictions/auto-resolve',{method:'POST'}).catch(()=>{});
 
-    // ── STEP 2: Load all cards with memory read + write + prediction save ─
+    // ── Load all cards in parallel with full error isolation ──────────────
     let done=0;
     const allModels=[];
+
     await Promise.allSettled(fixtures.map(async f=>{
-      const hT=f.participants?.find(p=>p.meta?.location==='home');
-      const aT=f.participants?.find(p=>p.meta?.location==='away');
-      if(!hT||!aT){done++;return;}
+      try{
+        const hT=f.participants?.find(p=>p.meta?.location==='home');
+        const aT=f.participants?.find(p=>p.meta?.location==='away');
+        if(!hT||!aT){ done++; return; }
 
-      // Fetch live data + stored team memory in parallel
-      const[h2hD,hFixD,aFixD,hMemResp,aMemResp]=await Promise.all([
-        api(`/fixtures/head-to-head/${hT.id}/${aT.id}?include=participants;scores&per_page=10`).then(r=>r.data||[]).catch(()=>[]),
-        api(`/teams/${hT.id}/fixtures?per_page=20&sort=-starting_at&include=participants;scores`).then(r=>r.data||[]).catch(()=>[]),
-        api(`/teams/${aT.id}/fixtures?per_page=20&sort=-starting_at&include=participants;scores`).then(r=>r.data||[]).catch(()=>[]),
-        fetch(`/memory/team/${hT.id}`).then(r=>r.json()).catch(()=>({found:false})),
-        fetch(`/memory/team/${aT.id}`).then(r=>r.json()).catch(()=>({found:false})),
-      ]);
+        // Fetch Sportmonks data (always needed)
+        const[h2hD,hFixD,aFixD]=await Promise.all([
+          api(`/fixtures/head-to-head/${hT.id}/${aT.id}?include=participants;scores&per_page=10`).then(r=>r.data||[]).catch(()=>[]),
+          api(`/teams/${hT.id}/fixtures?per_page=20&sort=-starting_at&include=participants;scores`).then(r=>r.data||[]).catch(()=>[]),
+          api(`/teams/${aT.id}/fixtures?per_page=20&sort=-starting_at&include=participants;scores`).then(r=>r.data||[]).catch(()=>[]),
+        ]);
 
-      const hFm=getForm(hFixD,hT.id), aFm=getForm(aFixD,aT.id);
+        // Fetch stored team memory (best-effort — never blocks rendering)
+        let hMemResp={found:false}, aMemResp={found:false};
+        try{
+          [hMemResp, aMemResp] = await Promise.all([
+            fetch(`/memory/team/${hT.id}`).then(r=>r.ok?r.json():{found:false}).catch(()=>({found:false})),
+            fetch(`/memory/team/${aT.id}`).then(r=>r.ok?r.json():{found:false}).catch(()=>({found:false})),
+          ]);
+        }catch(e){ /* memory fetch failed — continue without it */ }
 
-      // Compute fresh stats from live data
-      const freshHSt = getTeamStats(hFixD, hT.id);
-      const freshASt = getTeamStats(aFixD, aT.id);
+        const hFm=getForm(hFixD,hT.id), aFm=getForm(aFixD,aT.id);
+        const freshHSt=getTeamStats(hFixD,hT.id), freshASt=getTeamStats(aFixD,aT.id);
 
-      // Blend with stored memory if available — memory adds historical depth
-      // Formula: blended = (freshStat * liveWeight) + (memStat * memWeight)
-      // The more observations stored, the more we trust memory
-      const blendStats = (fresh, mem) => {
-        if(!fresh && !mem) return null;
-        if(!fresh) return mem;
-        if(!mem || !mem.found || !mem.team) return fresh;
-        const stored = mem.team;
-        const obsCount = stored.observationCount || 1;
-        // Memory weight grows with observations, capped at 40%
-        // After 20+ observations, memory contributes meaningfully
-        const memWeight = Math.min(obsCount / 50, 0.4);
-        const liveWeight = 1 - memWeight;
-        const blend = (a, b) => a * liveWeight + b * memWeight;
-        return {
-          ...fresh,
-          // Blend the key λ-driving stats
-          wAvgScored:      blend(fresh.wAvgScored,    stored.wAvgScored    ?? fresh.wAvgScored),
-          wAvgConceded:    blend(fresh.wAvgConceded,  stored.wAvgConceded  ?? fresh.wAvgConceded),
-          winRate:         blend(fresh.winRate,        stored.winRate       ?? fresh.winRate),
-          drawRate:        blend(fresh.drawRate,       stored.drawRate      ?? fresh.drawRate),
-          bttsRate:        blend(fresh.bttsRate,       stored.bttsRate      ?? fresh.bttsRate),
-          over25Rate:      blend(fresh.over25Rate,     stored.over25Rate    ?? fresh.over25Rate),
-          csRate:          blend(fresh.csRate,         stored.csRate        ?? fresh.csRate),
-          ftsRate:         blend(fresh.ftsRate,        stored.ftsRate       ?? fresh.ftsRate),
-          homeAvgScored:   fresh.homeAvgScored   ?? stored.homeAvgScored,
-          homeAvgConceded: fresh.homeAvgConceded ?? stored.homeAvgConceded,
-          awayAvgScored:   fresh.awayAvgScored   ?? stored.awayAvgScored,
-          awayAvgConceded: fresh.awayAvgConceded ?? stored.awayAvgConceded,
-          // Keep fresh momentum & streak (these must be recent)
-          momentum:      fresh.momentum,
-          scoringStreak: fresh.scoringStreak,
-          // Track total observations seen
-          observationCount: (stored.observationCount || 0) + fresh.matches,
-          hasMemory: true,
-          memWeight: Math.round(memWeight * 100),
+        // Blend live stats with stored memory
+        const blendStats=(fresh,mem)=>{
+          if(!fresh) return null;
+          if(!mem||!mem.found||!mem.team) return fresh;
+          const stored=mem.team;
+          const obsCount=stored.observationCount||1;
+          const memWeight=Math.min(obsCount/50,0.4);
+          const liveWeight=1-memWeight;
+          const blend=(a,b)=>a*liveWeight+b*memWeight;
+          return{
+            ...fresh,
+            wAvgScored:      blend(fresh.wAvgScored,    stored.wAvgScored    ??fresh.wAvgScored),
+            wAvgConceded:    blend(fresh.wAvgConceded,  stored.wAvgConceded  ??fresh.wAvgConceded),
+            winRate:         blend(fresh.winRate,        stored.winRate       ??fresh.winRate),
+            drawRate:        blend(fresh.drawRate,       stored.drawRate      ??fresh.drawRate),
+            bttsRate:        blend(fresh.bttsRate,       stored.bttsRate      ??fresh.bttsRate),
+            over25Rate:      blend(fresh.over25Rate,     stored.over25Rate    ??fresh.over25Rate),
+            csRate:          blend(fresh.csRate,         stored.csRate        ??fresh.csRate),
+            ftsRate:         blend(fresh.ftsRate,        stored.ftsRate       ??fresh.ftsRate),
+            homeAvgScored:   fresh.homeAvgScored   ??stored.homeAvgScored,
+            homeAvgConceded: fresh.homeAvgConceded ??stored.homeAvgConceded,
+            awayAvgScored:   fresh.awayAvgScored   ??stored.awayAvgScored,
+            awayAvgConceded: fresh.awayAvgConceded ??stored.awayAvgConceded,
+            momentum:fresh.momentum, scoringStreak:fresh.scoringStreak,
+            observationCount:(stored.observationCount||0)+fresh.matches,
+            hasMemory:true, memWeight:Math.round(memWeight*100),
+          };
         };
-      };
 
-      // Inject blended stats directly into form objects so runModel uses them
-      hFm.blendedStats = blendStats(freshHSt, hMemResp);
-      aFm.blendedStats = blendStats(freshASt, aMemResp);
+        hFm.blendedStats=blendStats(freshHSt,hMemResp);
+        aFm.blendedStats=blendStats(freshASt,aMemResp);
 
-      // Run model with blended stats
-      const modelResult = runModel(f, h2hD, hFm, aFm);
+        // Run model & apply calibration
+        const modelResult=runModel(f,h2hD,hFm,aFm);
+        const calibConf=getCalibratedConf(modelResult.conf,modelResult.tipType);
+        modelResult.conf=calibConf;
+        modelResult.confClass=calibConf>74?'cb-hi':calibConf>54?'cb-mid':'cb-lo';
 
-      // Apply calibration adjustment to confidence
-      const calibConf = getCalibratedConf(modelResult.conf, modelResult.tipType);
-      modelResult.conf = calibConf;
-      modelResult.confClass = calibConf>74?'cb-hi':calibConf>54?'cb-mid':'cb-lo';
+        allModels.push({f,modelResult,hT,aT});
 
-      allModels.push({f, modelResult, hT, aT});
+        // Render card
+        const wrap=document.getElementById(`w${f.id}`);
+        if(wrap) wrap.outerHTML=renderCard(f,h2hD,hFm,aFm,modelResult);
 
-      // Render the card
-      const wrap = document.getElementById(`w${f.id}`);
-      if(wrap) wrap.outerHTML = renderCard(f, h2hD, hFm, aFm, modelResult);
+        // Background learning (fire-and-forget — never awaited)
+        if(freshHSt) saveTeamMemory(hT.id,{...freshHSt,teamId:hT.id,teamName:hT.name});
+        if(freshASt) saveTeamMemory(aT.id,{...freshASt,teamId:aT.id,teamName:aT.name});
+        savePrediction(f,modelResult,hT,aT);
 
-      // ── BACKGROUND LEARNING (fire-and-forget) ──────────────────────────
-      // Save team memory so next visit has richer data
-      if(freshHSt) saveTeamMemory(hT.id, {...freshHSt, teamId:hT.id, teamName:hT.name});
-      if(freshASt) saveTeamMemory(aT.id, {...freshASt, teamId:aT.id, teamName:aT.name});
-
-      // Save prediction for result tracking
-      savePrediction(f, modelResult, hT, aT);
-
-      // Progress
-      done++;
-      const pct=Math.round(done/fixtures.length*100);
-      const pw=document.getElementById('progressWrap');
-      const pb=document.getElementById('progBar');
-      if(pw) pw.querySelector('div:first-child') && (pw.childNodes[0].textContent=`Loading ${done} / ${fixtures.length} fixtures…`);
-      if(pw) pw.textContent=`Loading ${done} / ${fixtures.length} fixtures…`;
-      if(pb) pb.style.width=pct+'%';
-      if(pw&&done===fixtures.length){ setTimeout(()=>pw.remove(),800); }
+      }catch(cardErr){
+        // Isolate failures — one bad card never blocks others
+        console.error(`[CARD FAIL] fixture ${f.id}:`,cardErr.message);
+        const wrap=document.getElementById(`w${f.id}`);
+        if(wrap) wrap.innerHTML=`<div style="padding:1rem;color:var(--dim);font-size:.72rem">Could not load this fixture.</div>`;
+      }finally{
+        // Progress always updates
+        done++;
+        const pct=Math.round(done/fixtures.length*100);
+        const pw=document.getElementById('progressWrap');
+        const pb=document.getElementById('progBar');
+        if(pw) pw.textContent=`Analysing ${done} / ${fixtures.length} matches…`;
+        if(pb) pb.style.width=pct+'%';
+        if(done===fixtures.length&&pw) setTimeout(()=>pw.remove(),800);
+      }
     }));
 
     // Build Top Picks banner — top 3 VALUE tips by confidence
