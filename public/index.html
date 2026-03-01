@@ -426,7 +426,24 @@ async function api(endpoint){
 }
 
 function getGoals(scores,side){
-  return scores?.find(s=>s.description==='CURRENT'&&s.score?.participant===side)?.score?.goals??null;
+  if(!scores?.length) return null;
+  // Priority 1: CURRENT description (live score / final score)
+  const cur = scores.find(s=>s.description==='CURRENT'&&s.score?.participant===side);
+  if(cur?.score?.goals!=null) return cur.score.goals;
+  // Priority 2: 2ND_HALF (Sportmonks sometimes uses this as final for team fixtures)
+  const half2 = scores.find(s=>s.description==='2ND_HALF'&&s.score?.participant===side);
+  if(half2?.score?.goals!=null) return half2.score.goals;
+  // Priority 3: Any score entry for this participant that has a goals value
+  const any = scores.find(s=>s.score?.participant===side&&s.score?.goals!=null);
+  return any?.score?.goals??null;
+}
+
+// Check if a fixture is completed (final result available)
+function isFinished(fixture){
+  const state=(fixture.state?.short_name||fixture.state?.name||'').toUpperCase();
+  if(['FT','AET','AP','FINISHED','FULL-TIME','AWARDED'].includes(state)) return true;
+  // Fallback: has a CURRENT score entry
+  return (fixture.scores||[]).some(s=>s.description==='CURRENT'&&s.score?.goals!=null);
 }
 
 function getForm(fixtures,teamId){
@@ -434,6 +451,7 @@ function getForm(fixtures,teamId){
   const form=[],raw=[];
   for(const f of sorted){
     if(form.length>=5)break;
+    if(!isFinished(f)&&getGoals(f.scores,'home')===null) continue;
     const hG=getGoals(f.scores,'home'),aG=getGoals(f.scores,'away');
     if(hG===null||aG===null)continue;
     const isH=f.participants?.find(p=>p.meta?.location==='home')?.id===teamId;
@@ -484,7 +502,11 @@ function poissonResult(hLambda, aLambda){
 function getTeamStats(fixtures, teamId){
   const completed = [...fixtures]
     .sort((a,b)=>new Date(b.starting_at)-new Date(a.starting_at))
-    .filter(f=>getGoals(f.scores,'home')!==null&&getGoals(f.scores,'away')!==null);
+    .filter(f=>{
+      // Accept fixture if state says finished OR if we can extract both scores
+      if(isFinished(f)) return true;
+      return getGoals(f.scores,'home')!==null && getGoals(f.scores,'away')!==null;
+    });
   if(!completed.length) return null;
 
   // All stats (overall)
@@ -1095,10 +1117,12 @@ async function loadDate(date){
         if(!hT||!aT){ done++; return; }
 
         // Fetch Sportmonks data (always needed)
+        // Use ending_before=today to ensure we only get past completed fixtures
+        const today = new Date().toISOString().split('T')[0];
         const[h2hD,hFixD,aFixD]=await Promise.all([
-          api(`/fixtures/head-to-head/${hT.id}/${aT.id}?include=participants;scores&per_page=10`).then(r=>r.data||[]).catch(()=>[]),
-          api(`/teams/${hT.id}/fixtures?per_page=20&sort=-starting_at&include=participants;scores`).then(r=>r.data||[]).catch(()=>[]),
-          api(`/teams/${aT.id}/fixtures?per_page=20&sort=-starting_at&include=participants;scores`).then(r=>r.data||[]).catch(()=>[]),
+          api(`/fixtures/head-to-head/${hT.id}/${aT.id}?include=participants;scores;state&per_page=10`).then(r=>r.data||[]).catch(()=>[]),
+          api(`/teams/${hT.id}/fixtures?per_page=25&sort=-starting_at&include=participants;scores;state`).then(r=>r.data||[]).catch(()=>[]),
+          api(`/teams/${aT.id}/fixtures?per_page=25&sort=-starting_at&include=participants;scores;state`).then(r=>r.data||[]).catch(()=>[]),
         ]);
 
         // Fetch stored team memory (best-effort — never blocks rendering)
