@@ -204,6 +204,63 @@ app.get('/odds/sports', async (req, res) => {
   }
 });
 
+// ── PAPER TRADING ──────────────────────────────────────────────────────────
+
+// Place a paper bet (called automatically when VALUE tip is found with edge ≥5%)
+app.post('/paper/bet', (req, res) => {
+  try {
+    const bet = req.body;
+    if (!bet.fixtureId || !bet.tip || !bet.odds)
+      return res.status(400).json({ error: 'fixtureId, tip, odds required' });
+    const placed = db.placePaperBet(bet);
+    if (!placed) return res.json({ ok: false, reason: 'Insufficient bankroll or no edge' });
+    console.log(`[PAPER] Bet placed: ${bet.homeTeam} vs ${bet.awayTeam} — ${bet.tip} @ ${bet.odds} (stake: £${placed.stake})`);
+    res.json({ ok: true, bet: placed });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Get current paper trading state
+app.get('/paper/state', (req, res) => {
+  try { res.json(db.getPaperState()); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Reset paper trading bankroll
+app.post('/paper/reset', (req, res) => {
+  try {
+    const bankroll = req.body.bankroll || 1000;
+    db.resetPaper(bankroll);
+    res.json({ ok: true, bankroll });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Auto-settle paper bets against final scores
+app.post('/paper/settle', async (req, res) => {
+  try {
+    const state   = db.getPaperState();
+    const pending = state.recentBets.filter(b => !b.result);
+    let settled   = 0;
+    for (const bet of pending) {
+      try {
+        const url  = `${SM_BASE}/fixtures/${bet.fixtureId}?include=scores;state&api_token=${SM_KEY}`;
+        const resp = await fetch(url);
+        const data = await resp.json();
+        const fix  = data.data;
+        if (!fix) continue;
+        const st = (fix.state?.short_name || '').toUpperCase();
+        if (!['FT','AET','AP'].includes(st)) continue;
+        const hG = fix.scores?.find(s=>s.description==='CURRENT'&&s.score?.participant==='home')?.score?.goals;
+        const aG = fix.scores?.find(s=>s.description==='CURRENT'&&s.score?.participant==='away')?.score?.goals;
+        if (hG == null || aG == null) continue;
+        const n = db.settlePaperBet(bet.fixtureId, hG, aG);
+        settled += n;
+        if (n) console.log(`[PAPER SETTLE] ${bet.homeTeam} vs ${bet.awayTeam}: ${hG}-${aG}`);
+      } catch(e) { console.error(`[PAPER SETTLE FAIL]`, e.message); }
+    }
+    res.json({ ok: true, settled, checked: pending.length, state: db.getPaperState() });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ── TEAM MEMORY ────────────────────────────────────────────────────────────
 app.post('/memory/team', (req, res) => {
   try {
@@ -305,15 +362,18 @@ app.get('/health', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`PROPRED v4 running on port ${PORT}`);
-  // Check quota on startup (free call)
   fetch(`http://localhost:${PORT}/odds/quota`)
     .then(r=>r.json())
     .then(d=>console.log(`[STARTUP] Odds quota — used: ${d.used}, remaining: ${d.remaining}`))
     .catch(()=>{});
-  // Auto-resolve pending predictions
   setTimeout(() => {
-    fetch(`http://localhost:${PORT}/predictions/auto-resolve`, { method:'POST' })
-      .then(r=>r.json()).then(d=>console.log('[STARTUP AUTO-RESOLVE]', d))
-      .catch(()=>{});
+    Promise.all([
+      fetch(`http://localhost:${PORT}/predictions/auto-resolve`,{method:'POST'}).then(r=>r.json()),
+      fetch(`http://localhost:${PORT}/paper/settle`,{method:'POST'}).then(r=>r.json()),
+    ]).then(([pred,paper])=>{
+      console.log('[STARTUP] Predictions resolved:', pred.resolved);
+      console.log('[STARTUP] Paper bets settled:', paper.settled);
+      if(paper.state) console.log(`[STARTUP] Bankroll: £${paper.state.bankroll} | P/L: ${paper.state.profitPct}% | Win rate: ${paper.state.winRate}%`);
+    }).catch(()=>{});
   }, 3000);
 });
