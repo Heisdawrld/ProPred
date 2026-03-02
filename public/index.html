@@ -1366,15 +1366,19 @@ async function loadDate(date){
         if(!hT||!aT){ done++; return; }
 
         // Fetch Sportmonks data
-        // Using /fixtures with participant filter — more reliable than /teams/:id/fixtures
-        // Also fetch current season ID from the fixture's league for better filtering
-        const seasonId = f.season_id || '';
+        // Correct v3 endpoint: /fixtures/between/date/FROM/TO/{team_id}
+        // Get last 10 weeks of fixtures for each team
+        const today = new Date();
+        const tenWeeksAgo = new Date(today - 70*24*60*60*1000);
+        const dateTo   = today.toISOString().split('T')[0];
+        const dateFrom = tenWeeksAgo.toISOString().split('T')[0];
+
         const[h2hD, hFixD, aFixD] = await Promise.all([
           api(`/fixtures/head-to-head/${hT.id}/${aT.id}?include=participants;scores;state&per_page=10`)
             .then(r=>r.data||[]).catch(()=>[]),
-          api(`/fixtures?filter[participant_id]=${hT.id}&per_page=30&sort=-starting_at&include=participants;scores;state`)
+          api(`/fixtures/between/date/${dateFrom}/${dateTo}/${hT.id}?include=participants;scores;state&per_page=30`)
             .then(r=>r.data||[]).catch(()=>[]),
-          api(`/fixtures?filter[participant_id]=${aT.id}&per_page=30&sort=-starting_at&include=participants;scores;state`)
+          api(`/fixtures/between/date/${dateFrom}/${dateTo}/${aT.id}?include=participants;scores;state&per_page=30`)
             .then(r=>r.data||[]).catch(()=>[]),
         ]);
 
@@ -1394,7 +1398,9 @@ async function loadDate(date){
             console.log('Finished fixtures:', hFixD.filter(f=>isFinished(f)).length, '/', hFixD.length);
           } else {
             console.warn('❌ EMPTY — trying raw API call...');
-            fetch(`/api/fixtures?filter[participant_id]=${hT.id}&per_page=3&sort=-starting_at&include=scores;state`)
+            const dbFrom=new Date(Date.now()-70*24*60*60*1000).toISOString().split('T')[0];
+            const dbTo=new Date().toISOString().split('T')[0];
+            fetch(`/api/fixtures/between/date/${dbFrom}/${dbTo}/${hT.id}?include=scores;state&per_page=3`)
               .then(r=>r.json())
               .then(d=>console.log('Raw response:', JSON.stringify(d).slice(0,800)))
               .catch(e=>console.error('Raw fetch failed:', e));
