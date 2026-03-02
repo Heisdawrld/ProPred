@@ -209,4 +209,147 @@ module.exports = {
   getTeam, saveTeam, getAllTeams,
   savePrediction, resolvePrediction,
   getCalibration, getPredictions, getRecentResults,
+  placePaperBet, settlePaperBet, getPaperState, resetPaper, kellyStake,
 };
+
+// ── PAPER TRADING ──────────────────────────────────────────────────────────
+
+const PAPER_FILE = path.join(DATA_DIR, 'paper.json');
+
+function loadPaper() {
+  try { return JSON.parse(fs.readFileSync(PAPER_FILE, 'utf8')); }
+  catch { return {
+    bankroll: 1000,          // Starting bankroll £1000
+    startBankroll: 1000,
+    bets: [],
+    stats: { totalBets:0, wins:0, losses:0, pushes:0, totalStaked:0, totalReturns:0 }
+  };}
+}
+
+function savePaper(data) {
+  fs.writeFileSync(PAPER_FILE, JSON.stringify(data, null, 2));
+}
+
+// Kelly Criterion stake: f = (bp - q) / b
+// b = decimal odds - 1, p = model probability, q = 1 - p
+function kellyStake(bankroll, modelProb, decimalOdds, fraction=0.25) {
+  const b = decimalOdds - 1;
+  const p = modelProb / 100;
+  const q = 1 - p;
+  const kelly = (b * p - q) / b;
+  if (kelly <= 0) return 0; // no edge
+  // Fractional Kelly (25%) for safety
+  const stake = bankroll * kelly * fraction;
+  return Math.max(1, Math.min(Math.round(stake * 100) / 100, bankroll * 0.1)); // cap at 10% bankroll
+}
+
+function placePaperBet(bet) {
+  const paper = loadPaper();
+  const stake = bet.stake || kellyStake(paper.bankroll, bet.modelProb, bet.odds);
+  if (stake <= 0 || paper.bankroll < stake) return null;
+
+  const newBet = {
+    id:          Date.now(),
+    fixtureId:   bet.fixtureId,
+    date:        bet.date || new Date().toISOString().split('T')[0],
+    homeTeam:    bet.homeTeam,
+    awayTeam:    bet.awayTeam,
+    league:      bet.league,
+    tip:         bet.tip,
+    market:      bet.market,
+    odds:        bet.odds,
+    modelProb:   bet.modelProb,
+    impliedProb: bet.impliedProb,
+    edgePct:     bet.edgePct,
+    stake:       parseFloat(stake.toFixed(2)),
+    potentialReturn: parseFloat((stake * bet.odds).toFixed(2)),
+    result:      null,   // pending
+    profit:      null,
+    bankrollBefore: paper.bankroll,
+    placedAt:    new Date().toISOString(),
+  };
+
+  paper.bankroll   = parseFloat((paper.bankroll - stake).toFixed(2));
+  paper.bets.push(newBet);
+  paper.stats.totalBets++;
+  paper.stats.totalStaked = parseFloat((paper.stats.totalStaked + stake).toFixed(2));
+  savePaper(paper);
+  return newBet;
+}
+
+function settlePaperBet(fixtureId, homeGoals, awayGoals) {
+  const paper = loadPaper();
+  let settled = 0;
+  paper.bets.forEach(bet => {
+    if (bet.fixtureId !== fixtureId || bet.result) return;
+    const won = evaluatePaperBet(bet.tip, bet.market, homeGoals, awayGoals, bet.homeTeam, bet.awayTeam);
+    bet.result   = won ? 'win' : 'loss';
+    bet.homeGoals = homeGoals;
+    bet.awayGoals = awayGoals;
+    bet.settledAt = new Date().toISOString();
+    if (won) {
+      bet.profit = parseFloat((bet.potentialReturn - bet.stake).toFixed(2));
+      paper.bankroll = parseFloat((paper.bankroll + bet.potentialReturn).toFixed(2));
+      paper.stats.wins++;
+      paper.stats.totalReturns = parseFloat((paper.stats.totalReturns + bet.potentialReturn).toFixed(2));
+    } else {
+      bet.profit = -bet.stake;
+      paper.stats.losses++;
+    }
+    settled++;
+  });
+  if (settled) savePaper(paper);
+  return settled;
+}
+
+function evaluatePaperBet(tip, market, hG, aG, homeTeam, awayTeam) {
+  const total = hG + aG;
+  const tipL  = (tip||'').toLowerCase();
+  if (market === 'h2h') {
+    if (tipL.includes(homeTeam?.toLowerCase()) && tipL.includes('win')) return hG > aG;
+    if (tipL.includes(awayTeam?.toLowerCase()) && tipL.includes('win')) return aG > hG;
+    if (tipL === 'draw') return hG === aG;
+  }
+  if (market === 'totals') {
+    const match = tipL.match(/(over|under)\s+([\d.]+)/);
+    if (match) {
+      const line = parseFloat(match[2]);
+      return match[1] === 'over' ? total > line : total < line;
+    }
+  }
+  return false;
+}
+
+function getPaperState() {
+  const paper = loadPaper();
+  const resolved = paper.bets.filter(b => b.result);
+  const pending  = paper.bets.filter(b => !b.result);
+  const roi      = paper.stats.totalStaked > 0
+    ? parseFloat(((paper.stats.totalReturns - paper.stats.totalStaked) / paper.stats.totalStaked * 100).toFixed(1))
+    : 0;
+  const winRate  = resolved.length > 0
+    ? Math.round(paper.stats.wins / resolved.length * 100)
+    : 0;
+  return {
+    bankroll:       paper.bankroll,
+    startBankroll:  paper.startBankroll,
+    profit:         parseFloat((paper.bankroll - paper.startBankroll).toFixed(2)),
+    profitPct:      parseFloat(((paper.bankroll - paper.startBankroll) / paper.startBankroll * 100).toFixed(1)),
+    roi,
+    winRate,
+    totalBets:      paper.stats.totalBets,
+    resolved:       resolved.length,
+    pending:        pending.length,
+    wins:           paper.stats.wins,
+    losses:         paper.stats.losses,
+    totalStaked:    paper.stats.totalStaked,
+    recentBets:     paper.bets.slice(-20).reverse(),
+  };
+}
+
+function resetPaper(newBankroll=1000) {
+  savePaper({
+    bankroll: newBankroll, startBankroll: newBankroll, bets: [],
+    stats: { totalBets:0, wins:0, losses:0, pushes:0, totalStaked:0, totalReturns:0 }
+  });
+}
