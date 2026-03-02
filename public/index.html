@@ -357,6 +357,38 @@ input[type=date]::-webkit-calendar-picker-indicator{filter:invert(1) opacity(.4)
       </div>
     </div>
 
+    <!-- PAPER TRADING DASHBOARD -->
+    <div class="scard" id="paperCard">
+      <div class="scard-title" style="color:#00ff88">🤖 Paper Trading
+        <span style="font-size:.6rem;color:var(--dim);font-weight:normal;margin-left:.4rem">AUTO MODE</span>
+      </div>
+      <!-- Bankroll stats -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin-bottom:.8rem">
+        <div style="background:var(--card2);border-radius:.4rem;padding:.5rem;text-align:center">
+          <div style="font-size:.58rem;color:var(--dim);margin-bottom:.2rem">BANKROLL</div>
+          <div id="paperBankroll" style="font-size:1rem;font-weight:800;font-family:'Space Mono',monospace;color:#00ff88">£1000</div>
+        </div>
+        <div style="background:var(--card2);border-radius:.4rem;padding:.5rem;text-align:center">
+          <div style="font-size:.58rem;color:var(--dim);margin-bottom:.2rem">P/L</div>
+          <div id="paperProfit" style="font-size:1rem;font-weight:800;font-family:'Space Mono',monospace">+0%</div>
+        </div>
+        <div style="background:var(--card2);border-radius:.4rem;padding:.5rem;text-align:center">
+          <div style="font-size:.58rem;color:var(--dim);margin-bottom:.2rem">WIN RATE</div>
+          <div id="paperWinRate" style="font-size:1rem;font-weight:800;font-family:'Space Mono',monospace;color:var(--gold)">—</div>
+        </div>
+        <div style="background:var(--card2);border-radius:.4rem;padding:.5rem;text-align:center">
+          <div style="font-size:.58rem;color:var(--dim);margin-bottom:.2rem">ROI</div>
+          <div id="paperROI" style="font-size:1rem;font-weight:800;font-family:'Space Mono',monospace">—</div>
+        </div>
+      </div>
+      <div style="font-size:.62rem;color:var(--dim);margin-bottom:.5rem">Bets: <span id="paperBets">0/0</span> settled · Kelly staking · Auto-settles at FT</div>
+      <div id="paperBetsList"></div>
+      <button onclick="fetch('/paper/settle',{method:'POST'}).then(r=>r.json()).then(d=>{loadPaperState();console.log('Settled:',d.settled)})"
+        style="width:100%;margin-top:.6rem;padding:.4rem;background:var(--card2);border:1px solid var(--border);border-radius:.4rem;color:var(--dim);font-size:.65rem;cursor:pointer">
+        🔄 Settle Pending Bets
+      </button>
+    </div>
+
     <div class="scard api-card">
       <div class="scard-title" style="color:var(--gold);font-size:.9rem">⚡ Live Data Sources</div>
       <div class="api-stat"><div class="api-dot" id="d1" style="background:var(--green)"></div>Sportmonks Fixtures</div>
@@ -950,6 +982,72 @@ async function saveTeamMemory(teamId, stats) {
   } catch(e) {}
 }
 
+async function placePaperBet(fixture, model, homeTeam, awayTeam) {
+  if(!model.edge?.hasValue) return;
+  try {
+    await fetch('/paper/bet', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fixtureId:   fixture.id,
+        date:        fixture.starting_at?.split('T')[0],
+        homeTeam:    homeTeam.name,
+        awayTeam:    awayTeam.name,
+        league:      fixture.league?.name||'',
+        tip:         model.edge.tip,
+        market:      model.edge.market,
+        odds:        model.edge.odds,
+        modelProb:   model.edge.modelProb,
+        impliedProb: model.edge.impliedProb,
+        edgePct:     model.edge.edgePct,
+      })
+    });
+    // Refresh paper dashboard after placing bet
+    loadPaperState();
+  } catch(e) {}
+}
+
+async function loadPaperState() {
+  try {
+    const state = await fetch('/paper/state').then(r=>r.json());
+    updatePaperDashboard(state);
+  } catch(e) {}
+}
+
+function updatePaperDashboard(state) {
+  if(!state) return;
+  const el = id => document.getElementById(id);
+  if(el('paperBankroll'))   el('paperBankroll').textContent   = `£${state.bankroll?.toFixed(2)||'—'}`;
+  if(el('paperProfit'))     el('paperProfit').textContent     = `${state.profitPct>=0?'+':''}${state.profitPct}%`;
+  if(el('paperProfit'))     el('paperProfit').style.color     = state.profitPct>=0?'var(--green)':'var(--red)';
+  if(el('paperWinRate'))    el('paperWinRate').textContent    = `${state.winRate}%`;
+  if(el('paperBets'))       el('paperBets').textContent       = `${state.resolved}/${state.totalBets}`;
+  if(el('paperROI'))        el('paperROI').textContent        = `${state.roi>=0?'+':''}${state.roi}%`;
+  if(el('paperROI'))        el('paperROI').style.color        = state.roi>=0?'var(--green)':'var(--red)';
+
+  // Recent bets list
+  const list = el('paperBetsList');
+  if(list && state.recentBets?.length){
+    list.innerHTML = state.recentBets.slice(0,8).map(b=>{
+      const icon = b.result==='win'?'✅':b.result==='loss'?'❌':'⏳';
+      const profit = b.profit!=null?(b.profit>=0?`+£${b.profit.toFixed(2)}`:`-£${Math.abs(b.profit).toFixed(2)}`):'pending';
+      const profitColor = b.profit==null?'var(--dim)':b.profit>=0?'var(--green)':'var(--red)';
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:.5rem 0;border-bottom:1px solid var(--border);font-size:.72rem">
+        <div>
+          <div style="font-weight:600">${icon} ${b.homeTeam} vs ${b.awayTeam}</div>
+          <div style="color:var(--dim)">${b.tip} @ ${b.odds} · Stake: £${b.stake}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="color:${profitColor};font-weight:700;font-family:'Space Mono',monospace">${profit}</div>
+          <div style="color:var(--dim)">Edge: +${b.edgePct}%</div>
+        </div>
+      </div>`;
+    }).join('');
+  } else if(list) {
+    list.innerHTML = `<div style="color:var(--dim);font-size:.72rem;text-align:center;padding:1rem">No bets placed yet — VALUE picks auto-bet when found</div>`;
+  }
+}
+
 // Get calibration-adjusted confidence
 // If our 70-80% tips are actually hitting 85%, adjust upward (and vice versa)
 // ── ODDS API HELPERS ───────────────────────────────────────────────────────
@@ -1267,27 +1365,40 @@ async function loadDate(date){
         const aT=f.participants?.find(p=>p.meta?.location==='away');
         if(!hT||!aT){ done++; return; }
 
-        // Fetch Sportmonks data (always needed)
-        const[h2hD,hFixD,aFixD]=await Promise.all([
-          api(`/fixtures/head-to-head/${hT.id}/${aT.id}?include=participants;scores;state&per_page=10`).then(r=>r.data||[]).catch(()=>[]),
-          api(`/teams/${hT.id}/fixtures?per_page=25&sort=-starting_at&include=participants;scores;state`).then(r=>r.data||[]).catch(()=>[]),
-          api(`/teams/${aT.id}/fixtures?per_page=25&sort=-starting_at&include=participants;scores;state`).then(r=>r.data||[]).catch(()=>[]),
+        // Fetch Sportmonks data
+        // Using /fixtures with participant filter — more reliable than /teams/:id/fixtures
+        // Also fetch current season ID from the fixture's league for better filtering
+        const seasonId = f.season_id || '';
+        const[h2hD, hFixD, aFixD] = await Promise.all([
+          api(`/fixtures/head-to-head/${hT.id}/${aT.id}?include=participants;scores;state&per_page=10`)
+            .then(r=>r.data||[]).catch(()=>[]),
+          api(`/fixtures?filter[participant_id]=${hT.id}&per_page=30&sort=-starting_at&include=participants;scores;state`)
+            .then(r=>r.data||[]).catch(()=>[]),
+          api(`/fixtures?filter[participant_id]=${aT.id}&per_page=30&sort=-starting_at&include=participants;scores;state`)
+            .then(r=>r.data||[]).catch(()=>[]),
         ]);
 
-        // DEBUG: Log raw API response for first fixture only
-        if(!window._debugged && hFixD.length>0){
+        // DEBUG: log first card only
+        if(!window._debugged){
           window._debugged=true;
-          const sample=hFixD[0];
-          console.group('🔍 PROPRED DEBUG — Team Fixture Sample');
-          console.log('Team:', hT.name, '| Fixture date:', sample.starting_at);
-          console.log('State:', JSON.stringify(sample.state));
-          console.log('Scores array:', JSON.stringify(sample.scores));
-          console.log('isFinished?', isFinished(sample));
-          console.log('getGoals(home):', getGoals(sample.scores,'home'));
-          console.log('getGoals(away):', getGoals(sample.scores,'away'));
-          console.log('Total fixtures returned:', hFixD.length);
-          console.log('Fixtures with state FT:', hFixD.filter(f=>isFinished(f)).length);
-          console.log('Fixtures with any scores:', hFixD.filter(f=>(f.scores||[]).length>0).length);
+          console.group('🔍 PROPRED DEBUG');
+          console.log('Team:', hT.name, '| ID:', hT.id);
+          console.log('hFixD length:', hFixD.length);
+          if(hFixD.length>0){
+            const s=hFixD[0];
+            console.log('Sample fixture:', s.starting_at, '| state:', s.state?.short_name);
+            console.log('Scores array length:', (s.scores||[]).length);
+            console.log('First score entry:', JSON.stringify((s.scores||[])[0]));
+            console.log('isFinished?', isFinished(s));
+            console.log('getGoals home:', getGoals(s.scores,'home'), '| away:', getGoals(s.scores,'away'));
+            console.log('Finished fixtures:', hFixD.filter(f=>isFinished(f)).length, '/', hFixD.length);
+          } else {
+            console.warn('❌ EMPTY — trying raw API call...');
+            fetch(`/api/fixtures?filter[participant_id]=${hT.id}&per_page=3&sort=-starting_at&include=scores;state`)
+              .then(r=>r.json())
+              .then(d=>console.log('Raw response:', JSON.stringify(d).slice(0,800)))
+              .catch(e=>console.error('Raw fetch failed:', e));
+          }
           console.groupEnd();
         }
 
@@ -1376,6 +1487,12 @@ async function loadDate(date){
         if(freshHSt) saveTeamMemory(hT.id,{...freshHSt,teamId:hT.id,teamName:hT.name});
         if(freshASt) saveTeamMemory(aT.id,{...freshASt,teamId:aT.id,teamName:aT.name});
         savePrediction(f,modelResult,hT,aT);
+
+        // Auto-place paper bet if genuine value edge found (≥5%) and match not started
+        const matchStarted = f.state?.short_name && f.state.short_name !== 'NS';
+        if(modelResult.edge?.hasValue && !matchStarted){
+          placePaperBet(f, modelResult, hT, aT);
+        }
 
       }catch(cardErr){
         // Isolate failures — one bad card never blocks others
@@ -1482,7 +1599,7 @@ function switchXTab(btn,tabId){
   panel.querySelectorAll('[id]').forEach(c=>{if(c.id.startsWith('x'))c.style.display=c.id===tabId?'block':'none';});
 }
 
-(function(){const d=todayISO();document.getElementById('globalDate').value=d;buildDateBar(d);loadDate(d);loadLearningData();})();
+(function(){const d=todayISO();document.getElementById('globalDate').value=d;buildDateBar(d);loadDate(d);loadLearningData();loadPaperState();})();
 </script>
 </body>
 </html>
