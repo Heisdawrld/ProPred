@@ -156,12 +156,16 @@ Rules: confidence 40-85 only. Only pick value you genuinely see. Be sharp, not g
     const resp = await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
       headers:{'Content-Type':'application/json','x-api-key':AI_KEY,'anthropic-version':'2023-06-01'},
-      body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:400,messages:[{role:'user',content:prompt}]})
+      body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:1024,messages:[{role:'user',content:prompt}]})
     });
     const data = await resp.json();
-    console.log('[AI] Response status:', resp.status, '| data:', JSON.stringify(data).slice(0,300));
+    console.log('[AI] status:', resp.status, 'response:', JSON.stringify(data).slice(0,400));
     const text = data.content?.[0]?.text||'';
-    return JSON.parse(text.replace(/```json|```/g,'').trim());
+    if(!text) { console.error('[AI] Empty response'); return null; }
+    // Extract JSON from response - handle markdown code blocks and extra text
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if(!jsonMatch) { console.error('[AI] No JSON found in:', text.slice(0,200)); return null; }
+    return JSON.parse(jsonMatch[0]);
   } catch(e) { console.error('[AI]',e.message); return null; }
 }
 
