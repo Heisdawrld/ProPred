@@ -214,16 +214,19 @@ app.get('/api/match/:id', async (req, res) => {
     // Get fixture from store (populated when /api/fixtures was called)
     let fixture = fixtureStore[fixtureId];
     
-    // If not in store, fetch today's fixtures to populate store
+    // If not in store, fetch today AND yesterday fixtures to populate store
     if(!fixture) {
-      const date = new Date().toISOString().split('T')[0];
-      await fetchESPN(date);
+      const today = new Date().toISOString().split('T')[0];
+      const yesterday = new Date(Date.now()-86400000).toISOString().split('T')[0];
+      const tomorrow = new Date(Date.now()+86400000).toISOString().split('T')[0];
+      await Promise.all([fetchESPN(today), fetchESPN(yesterday), fetchESPN(tomorrow)]);
       fixture = fixtureStore[fixtureId];
     }
 
     if(!fixture) {
-      console.log('[MATCH] Not found in store, keys:', Object.keys(fixtureStore).slice(0,5));
-      return res.status(404).json({error:`Fixture ${fixtureId} not found`});
+      console.log('[MATCH] Not found. Store has:', Object.keys(fixtureStore).length, 'fixtures. Keys:', Object.keys(fixtureStore).slice(0,10));
+      // Last resort: return a basic response so AI still runs
+      return res.status(404).json({error:`Fixture ${fixtureId} not found. Please go to Fixtures page first, then click a match.`});
     }
 
     console.log('[MATCH] Found:', fixture.homeTeam, 'vs', fixture.awayTeam);
@@ -354,6 +357,9 @@ app.get('*',(req,res)=>res.sendFile(path.join(__dirname,'../public/index.html'))
 
 app.listen(PORT,()=>{
   console.log(`PROPRED v2 on :${PORT} | AI:${AI_KEY?'✅':'❌'}`);
+  // Pre-populate fixture store on startup
+  const today = new Date().toISOString().split('T')[0];
+  fetchESPN(today).then(f=>console.log(`[STARTUP] Loaded ${f.length} fixtures into store`)).catch(()=>{});
   setTimeout(()=>{
     fetch(`http://localhost:${PORT}/api/settle`,{method:'POST'})
       .then(r=>r.json()).then(d=>console.log('[STARTUP] Settled:',d.settled)).catch(()=>{});
