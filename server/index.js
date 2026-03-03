@@ -157,7 +157,7 @@ Respond with ONLY a valid JSON object. No markdown. No extra text. Start with { 
   if (GEMINI_KEY) {
     console.log('[AI] Calling Gemini...');
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`;
       const resp = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
