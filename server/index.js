@@ -136,17 +136,22 @@ async function loadFixtures(date) {
 }
 
 // ── AI ANALYSIS ────────────────────────────────────────────────────────────
-async function analyseWithAI(homeTeam, awayTeam, league, odds) {
+async function analyseWithAI(homeTeam, awayTeam, league, odds, h2h=[], homeForm=[], awayForm=[]) {
   const oddsStr = odds?.home
     ? `Home Win: ${odds.home} | Draw: ${odds.draw} | Away Win: ${odds.away}${odds.over25 ? ` | Over 2.5: ${odds.over25} | Under 2.5: ${odds.under25}` : ''}`
     : 'No odds available';
 
-  const prompt = `You are a sharp football betting analyst. Analyse this match.
-MATCH: ${homeTeam} vs ${awayTeam}
-LEAGUE: ${league}
+  const fmtH2H = h2h.slice(0,5).map(m=>`${m.homeTeam} ${m.homeGoals}-${m.awayGoals} ${m.awayTeam}`).join(' | ') || 'No data';
+  const fmtForm = (form, name) => form.slice(0,5).map(f=>`${f.result}(${f.homeGoals}-${f.awayGoals})`).join(' ') || 'No data';
+
+  const prompt = `You are a sharp football betting analyst. Analyse this match and find genuine value.
+MATCH: ${homeTeam} vs ${awayTeam} (${league})
 BOOKMAKER ODDS: ${oddsStr}
+H2H LAST 5: ${fmtH2H}
+${homeTeam} FORM: ${fmtForm(homeForm, homeTeam)}
+${awayTeam} FORM: ${fmtForm(awayForm, awayTeam)}
 Respond with ONLY a valid JSON object. No markdown. No extra text. Start with { end with }.
-{"summary":"2 sentence match analysis","tip":"e.g. ${homeTeam} Win or Over 2.5 Goals","market":"h2h or totals","confidence":65,"model_prob":68,"reasoning":"why this bet has value","risk":"low"}`;
+{"summary":"2 sentence match analysis using the data","tip":"e.g. ${homeTeam} Win or Over 2.5 Goals","market":"h2h or totals","confidence":65,"model_prob":68,"reasoning":"specific reason this has value vs the odds","risk":"low"}`;
 
   // Try Groq first (free, no credit card)
   if (GROQ_KEY) {
@@ -219,6 +224,60 @@ Respond with ONLY a valid JSON object. No markdown. No extra text. Start with { 
   return null;
 }
 
+
+// ── API-FOOTBALL FORM + H2H ────────────────────────────────────────────────
+async function getFormAndH2H(homeTeam, awayTeam) {
+  if (!FOOTBALL_KEY) return { h2h: [], homeForm: [], awayForm: [] };
+  try {
+    // Search team IDs
+    const [hRes, aRes] = await Promise.all([
+      fetch(`https://v3.football.api-sports.io/teams?name=${encodeURIComponent(homeTeam)}`, { headers: { 'x-apisports-key': FOOTBALL_KEY } }),
+      fetch(`https://v3.football.api-sports.io/teams?name=${encodeURIComponent(awayTeam)}`, { headers: { 'x-apisports-key': FOOTBALL_KEY } }),
+    ]);
+    const hData = await hRes.json();
+    const aData = await aRes.json();
+    const homeId = hData.response?.[0]?.team?.id;
+    const awayId = aData.response?.[0]?.team?.id;
+    console.log('[AF] homeId:', homeId, 'awayId:', awayId);
+    if (!homeId || !awayId) return { h2h: [], homeForm: [], awayForm: [] };
+
+    const [h2hRes, hFormRes, aFormRes] = await Promise.all([
+      fetch(`https://v3.football.api-sports.io/fixtures/headtohead?h2h=${homeId}-${awayId}&last=5`, { headers: { 'x-apisports-key': FOOTBALL_KEY } }),
+      fetch(`https://v3.football.api-sports.io/fixtures?team=${homeId}&last=5&status=FT`, { headers: { 'x-apisports-key': FOOTBALL_KEY } }),
+      fetch(`https://v3.football.api-sports.io/fixtures?team=${awayId}&last=5&status=FT`, { headers: { 'x-apisports-key': FOOTBALL_KEY } }),
+    ]);
+    const h2hData   = await h2hRes.json();
+    const hFormData = await hFormRes.json();
+    const aFormData = await aFormRes.json();
+
+    const fmtFixture = (m, teamId) => {
+      const isHome = m.teams?.home?.id === teamId;
+      const gf = isHome ? m.goals?.home : m.goals?.away;
+      const ga = isHome ? m.goals?.away : m.goals?.home;
+      const result = gf == null ? null : gf > ga ? 'W' : gf < ga ? 'L' : 'D';
+      return {
+        date: m.fixture?.date?.split('T')[0],
+        homeTeam: m.teams?.home?.name, awayTeam: m.teams?.away?.name,
+        homeGoals: m.goals?.home, awayGoals: m.goals?.away,
+        isHome, result,
+      };
+    };
+
+    return {
+      h2h: (h2hData.response || []).slice(0,5).map(m => ({
+        date: m.fixture?.date?.split('T')[0],
+        homeTeam: m.teams?.home?.name, awayTeam: m.teams?.away?.name,
+        homeGoals: m.goals?.home, awayGoals: m.goals?.away,
+      })),
+      homeForm: (hFormData.response || []).map(m => fmtFixture(m, homeId)),
+      awayForm: (aFormData.response || []).map(m => fmtFixture(m, awayId)),
+    };
+  } catch(e) {
+    console.error('[AF] Error:', e.message);
+    return { h2h: [], homeForm: [], awayForm: [] };
+  }
+}
+
 // ── ROUTES ─────────────────────────────────────────────────────────────────
 
 app.get('/api/fixtures', async (req, res) => {
@@ -268,9 +327,10 @@ app.get('/api/match/:id', async (req, res) => {
     });
   }
 
-  // Run fresh AI analysis
-  console.log('[MATCH] Running fresh AI for:', fixture.homeTeam, 'vs', fixture.awayTeam);
-  const ai = await analyseWithAI(fixture.homeTeam, fixture.awayTeam, fixture.league, fixture.odds);
+  // Fetch form + H2H
+  const { h2h, homeForm, awayForm } = await getFormAndH2H(fixture.homeTeam, fixture.awayTeam);
+  console.log('[MATCH] Running fresh AI for:', fixture.homeTeam, 'vs', fixture.awayTeam, '| H2H:', h2h.length, 'homeForm:', homeForm.length);
+  const ai = await analyseWithAI(fixture.homeTeam, fixture.awayTeam, fixture.league, fixture.odds, h2h, homeForm, awayForm);
 
   const odds = fixture.odds || {};
   const impliedProb = odds.home ? Math.round(100 / odds.home) : null;
@@ -303,7 +363,7 @@ app.get('/api/match/:id', async (req, res) => {
     implied_prob: impliedProb,
     edge_pct:   edgePct,
     has_value:  edgePct != null && edgePct >= 3,
-    h2h: [], home_form: [], away_form: [],
+    h2h, home_form: homeForm, away_form: awayForm,
   });
 });
 
