@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: propred-v2
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: API_FOOTBALL_KEY
+        value: dld7aaea599eb42ce6a723c2935ee70e
+      - key: ODDS_API_KEY
+        value: f40efeabae93fc096daa59c7e2ab6fc2
+      - key: ANTHROPIC_KEY
+        sync: false
+      - key: DATA_DIR
+        value: /opt/render/project/data
+    disk:
+      name: propred-data
+      mountPath: /opt/render/project/data
+      sizeGB: 1
