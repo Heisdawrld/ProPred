@@ -8,6 +8,7 @@ const db       = require('./db');
 const app  = express();
 const PORT = process.env.PORT || 10000;
 const AI_KEY       = (process.env.ANTHROPIC_KEY || '').trim();
+const GEMINI_KEY   = (process.env.GEMINI_KEY || '').trim();
 const FOOTBALL_KEY = process.env.API_FOOTBALL_KEY || '';
 const ODDS_KEY     = process.env.ODDS_API_KEY || '';
 
@@ -135,7 +136,8 @@ async function loadFixtures(date) {
 
 // ── AI ANALYSIS ────────────────────────────────────────────────────────────
 async function analyseWithAI(homeTeam, awayTeam, league, odds) {
-  if (!AI_KEY) { console.log('[AI] No key'); return null; }
+  const key = GEMINI_KEY || AI_KEY;
+  if (!key) { console.log('[AI] No key'); return null; }
 
   const oddsStr = odds?.home
     ? `Home Win: ${odds.home} | Draw: ${odds.draw} | Away Win: ${odds.away}${odds.over25 ? ` | Over 2.5: ${odds.over25} | Under 2.5: ${odds.under25}` : ''}`
@@ -151,41 +153,51 @@ Respond with ONLY a valid JSON object. No markdown. No extra text. Start with { 
 
 {"summary":"2 sentence match analysis","tip":"e.g. ${homeTeam} Win or Over 2.5 Goals","market":"h2h or totals","confidence":65,"model_prob":68,"reasoning":"why this bet has value","risk":"low"}`;
 
-  console.log('[AI] Calling Claude... key length:', AI_KEY.length);
+  // Use Gemini if key available, else Claude
+  if (GEMINI_KEY) {
+    console.log('[AI] Calling Gemini...');
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`;
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.3, maxOutputTokens: 512 },
+        }),
+      });
+      const data = await resp.json();
+      console.log('[AI] Gemini status:', resp.status, '| Body:', JSON.stringify(data).slice(0, 300));
+      if (resp.status !== 200) { console.error('[AI] Gemini error:', data); return null; }
+      const text = (data.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+      if (!text) { console.error('[AI] Gemini empty'); return null; }
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) { console.error('[AI] No JSON:', text.slice(0,200)); return null; }
+      const parsed = JSON.parse(jsonMatch[0]);
+      console.log('[AI] Gemini success:', parsed.tip);
+      return parsed;
+    } catch(e) { console.error('[AI] Gemini exception:', e.message); return null; }
+  }
 
+  // Claude fallback
+  console.log('[AI] Calling Claude... key length:', AI_KEY.length);
   try {
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method:  'POST',
-      headers: {
-        'Content-Type':      'application/json',
-        'x-api-key':         AI_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model:      'claude-haiku-4-5-20251001',
-        max_tokens: 512,
-        messages:   [{ role: 'user', content: prompt }],
-      }),
+      headers: { 'Content-Type': 'application/json', 'x-api-key': AI_KEY, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 512, messages: [{ role: 'user', content: prompt }] }),
     });
-
     const data = await resp.json();
-    console.log('[AI] Status:', resp.status, '| Body:', JSON.stringify(data).slice(0, 400));
-
-    if (resp.status !== 200) { console.error('[AI] Non-200:', data); return null; }
-
+    console.log('[AI] Claude status:', resp.status);
+    if (resp.status !== 200) { console.error('[AI] Claude error:', data); return null; }
     const text = (data.content?.[0]?.text || '').trim();
-    if (!text) { console.error('[AI] Empty text'); return null; }
-
+    if (!text) return null;
     const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) { console.error('[AI] No JSON in:', text); return null; }
-
+    if (!jsonMatch) return null;
     const parsed = JSON.parse(jsonMatch[0]);
-    console.log('[AI] Success:', parsed.tip);
+    console.log('[AI] Claude success:', parsed.tip);
     return parsed;
-  } catch(e) {
-    console.error('[AI] Exception:', e.message);
-    return null;
-  }
+  } catch(e) { console.error('[AI] Claude exception:', e.message); return null; }
 }
 
 // ── ROUTES ─────────────────────────────────────────────────────────────────
