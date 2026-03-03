@@ -156,9 +156,10 @@ Rules: confidence 40-85 only. Only pick value you genuinely see. Be sharp, not g
     const resp = await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
       headers:{'Content-Type':'application/json','x-api-key':AI_KEY,'anthropic-version':'2023-06-01'},
-      body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:400,messages:[{role:'user',content:prompt}]})
+      body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:400,messages:[{role:'user',content:prompt}]})
     });
     const data = await resp.json();
+    console.log('[AI] Response status:', resp.status, '| data:', JSON.stringify(data).slice(0,300));
     const text = data.content?.[0]?.text||'';
     return JSON.parse(text.replace(/```json|```/g,'').trim());
   } catch(e) { console.error('[AI]',e.message); return null; }
