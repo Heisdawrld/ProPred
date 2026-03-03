@@ -196,11 +196,24 @@ function getCachedAnalysis(fixtureId) {
 }
 
 function cacheAnalysis(data) {
-  db.prepare(`INSERT OR REPLACE INTO analysis_cache
-    (fixture_id,home_team,away_team,league,fixture_date,analysis,tip,market,odds,edge_pct,model_prob,created_at)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
-  `).run(data.fixture_id,data.home_team,data.away_team,data.league,data.fixture_date,
-    data.analysis,data.tip,data.market,data.odds,data.edge_pct,data.model_prob);
+  try {
+    db.prepare(`INSERT OR REPLACE INTO analysis_cache
+      (fixture_id,home_team,away_team,league,fixture_date,analysis,tip,market,odds,edge_pct,model_prob,created_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+    `).run(
+      String(data.fixture_id||''),
+      data.home_team||'',
+      data.away_team||'',
+      data.league||'',
+      data.fixture_date||'',
+      data.analysis||'',
+      data.tip||'',
+      data.market||'',
+      data.best_odds||null,
+      data.edge_pct||null,
+      data.model_prob||null
+    );
+  } catch(e) { console.error('[CACHE]', e.message); }
 }
 
 module.exports = {
