@@ -9,32 +9,35 @@ const PORT = process.env.PORT || 3000;
 const ODDS_KEY  = process.env.ODDS_API_KEY  || 'f40efeabae93fc096daa59c7e2ab6fc2';
 const AF_KEY    = process.env.API_FOOTBALL_KEY || 'dld7aaea599eb42ce6a723c2935ee70e';
 const AI_KEY    = process.env.ANTHROPIC_KEY || '';
-const AF_BASE   = 'https://v3.football.api-sports.io';
 const ODDS_BASE = 'https://api.the-odds-api.com/v4';
+const AF_BASE   = 'https://v3.football.api-sports.io';
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
 
-// ── ESPN (FREE, NO KEY) ────────────────────────────────────────────────────
+// ── ESPN ───────────────────────────────────────────────────────────────────
 const ESPN_LEAGUES = [
-  { id: 'eng.1',          name: 'Premier League',   oddsKey: 'soccer_epl' },
-  { id: 'esp.1',          name: 'La Liga',           oddsKey: 'soccer_spain_la_liga' },
-  { id: 'ger.1',          name: 'Bundesliga',        oddsKey: 'soccer_germany_bundesliga' },
-  { id: 'ita.1',          name: 'Serie A',           oddsKey: 'soccer_italy_serie_a' },
-  { id: 'fra.1',          name: 'Ligue 1',           oddsKey: 'soccer_france_ligue_one' },
-  { id: 'uefa.champions', name: 'Champions League',  oddsKey: 'soccer_uefa_champs_league' },
-  { id: 'uefa.europa',    name: 'Europa League',     oddsKey: 'soccer_uefa_europa_league' },
-  { id: 'eng.2',          name: 'Championship',      oddsKey: 'soccer_efl_champ' },
-  { id: 'ned.1',          name: 'Eredivisie',        oddsKey: 'soccer_netherlands_eredivisie' },
-  { id: 'por.1',          name: 'Primeira Liga',     oddsKey: 'soccer_portugal_primeira_liga' },
-  { id: 'sco.1',          name: 'Scottish Prem',     oddsKey: 'soccer_scotland_premiership' },
-  { id: 'tur.1',          name: 'Super Lig',         oddsKey: 'soccer_turkey_super_league' },
+  { id: 'eng.1',          name: 'Premier League',  oddsKey: 'soccer_epl' },
+  { id: 'esp.1',          name: 'La Liga',          oddsKey: 'soccer_spain_la_liga' },
+  { id: 'ger.1',          name: 'Bundesliga',       oddsKey: 'soccer_germany_bundesliga' },
+  { id: 'ita.1',          name: 'Serie A',          oddsKey: 'soccer_italy_serie_a' },
+  { id: 'fra.1',          name: 'Ligue 1',          oddsKey: 'soccer_france_ligue_one' },
+  { id: 'uefa.champions', name: 'Champions League', oddsKey: 'soccer_uefa_champs_league' },
+  { id: 'uefa.europa',    name: 'Europa League',    oddsKey: 'soccer_uefa_europa_league' },
+  { id: 'eng.2',          name: 'Championship',     oddsKey: 'soccer_efl_champ' },
+  { id: 'ned.1',          name: 'Eredivisie',       oddsKey: 'soccer_netherlands_eredivisie' },
+  { id: 'por.1',          name: 'Primeira Liga',    oddsKey: 'soccer_portugal_primeira_liga' },
+  { id: 'sco.1',          name: 'Scottish Prem',    oddsKey: 'soccer_scotland_premiership' },
+  { id: 'tur.1',          name: 'Super Lig',        oddsKey: 'soccer_turkey_super_league' },
 ];
 
+// In-memory fixture store so match page can find fixtures by ID
+const fixtureStore = {};
+
 function espnStatus(code) {
-  const m = { STATUS_SCHEDULED:'NS', STATUS_IN_PROGRESS:'1H', STATUS_HALFTIME:'HT',
-    STATUS_FINAL:'FT', STATUS_FULL_TIME:'FT', STATUS_POSTPONED:'PST', STATUS_CANCELED:'CANC' };
-  return m[code] || 'NS';
+  const m = { STATUS_SCHEDULED:'NS',STATUS_IN_PROGRESS:'1H',STATUS_HALFTIME:'HT',
+    STATUS_FINAL:'FT',STATUS_FULL_TIME:'FT',STATUS_POSTPONED:'PST',STATUS_CANCELED:'CANC' };
+  return m[code]||'NS';
 }
 
 async function fetchESPN(date) {
@@ -50,32 +53,28 @@ async function fetchESPN(date) {
         const home = comp?.competitors?.find(c=>c.homeAway==='home');
         const away = comp?.competitors?.find(c=>c.homeAway==='away');
         if(!home||!away) return;
-        const hG = parseInt(home.score), aG = parseInt(away.score);
-        all.push({
-          id:         ev.id,
-          date:       comp.date,
-          status:     espnStatus(comp.status?.type?.name),
-          homeTeam:   home.team.displayName,
-          awayTeam:   away.team.displayName,
-          homeLogo:   home.team.logo,
-          awayLogo:   away.team.logo,
-          homeGoals:  isNaN(hG)?null:hG,
-          awayGoals:  isNaN(aG)?null:aG,
-          league:     league.name,
-          leagueId:   league.id,
-          oddsKey:    league.oddsKey,
-          venue:      comp.venue?.fullName||null,
-          odds:       {home:null,draw:null,away:null,over25:null,under25:null},
-          hasOdds:    false,
-        });
+        const hG=parseInt(home.score), aG=parseInt(away.score);
+        const fixture = {
+          id: ev.id, date: comp.date,
+          status: espnStatus(comp.status?.type?.name),
+          homeTeam: home.team.displayName, awayTeam: away.team.displayName,
+          homeLogo: home.team.logo, awayLogo: away.team.logo,
+          homeGoals: isNaN(hG)?null:hG, awayGoals: isNaN(aG)?null:aG,
+          league: league.name, leagueId: league.id, oddsKey: league.oddsKey,
+          venue: comp.venue?.fullName||null,
+          odds: {home:null,draw:null,away:null,over25:null,under25:null},
+          hasOdds: false,
+        };
+        all.push(fixture);
+        fixtureStore[ev.id] = fixture; // store for match lookup
       });
-      console.log(`[ESPN] ${league.name}: ${data.events?.length||0} fixtures`);
+      console.log(`[ESPN] ${league.name}: ${data.events?.length||0}`);
     } catch(e) { console.error(`[ESPN] ${league.name}:`, e.message); }
   }));
   return all;
 }
 
-// ── ODDS API ───────────────────────────────────────────────────────────────
+// ── ODDS ───────────────────────────────────────────────────────────────────
 const oddsCache = {};
 async function getOdds(sportKey) {
   const now = Date.now();
@@ -116,7 +115,7 @@ function extractOdds(oddsMatch, homeTeam, awayTeam) {
   };
 }
 
-// ── API-FOOTBALL (H2H + FORM only) ────────────────────────────────────────
+// ── API-FOOTBALL ───────────────────────────────────────────────────────────
 async function afFetch(endpoint) {
   try {
     const resp = await fetch(`${AF_BASE}${endpoint}`,{headers:{'x-apisports-key':AF_KEY}});
@@ -127,50 +126,52 @@ async function afFetch(endpoint) {
 
 // ── CLAUDE AI ──────────────────────────────────────────────────────────────
 async function analyseWithAI(homeTeam, awayTeam, league, h2h, homeForm, awayForm, odds) {
-  const fmtH2H = h2h.slice(0,5).map(m=>`${m.teams.home.name} ${m.goals.home??'?'}-${m.goals.away??'?'} ${m.teams.away.name}`).join(' | ')||'No data';
-  const fmtForm = (fixtures, teamId) => fixtures.slice(0,5).map(m=>{
-    const isHome=m.teams.home.id===teamId;
-    const gf=isHome?m.goals.home:m.goals.away, ga=isHome?m.goals.away:m.goals.home;
-    const r=gf>ga?'W':gf<ga?'L':'D';
-    return `${r}(${gf??'?'}-${ga??'?'})`;
-  }).join(' ')||'Unknown';
+  const fmtH2H = h2h.slice(0,5).map(m=>`${m.teams?.home?.name} ${m.goals?.home??'?'}-${m.goals?.away??'?'} ${m.teams?.away?.name}`).join(' | ')||'No H2H data';
+  
+  const fmtForm = (fixtures, teamName) => {
+    const finished = fixtures.filter(m=>m.goals?.home!=null&&m.goals?.away!=null).slice(0,5);
+    return finished.map(m=>{
+      const isHome=m.teams?.home?.name?.toLowerCase().includes(teamName.split(' ')[0].toLowerCase());
+      const gf=isHome?m.goals.home:m.goals.away, ga=isHome?m.goals.away:m.goals.home;
+      return `${gf>ga?'W':gf<ga?'L':'D'}(${gf}-${ga})`;
+    }).join(' ')||'No form data';
+  };
 
-  const oddsStr = odds.home
-    ? `1X2: ${odds.home}/${odds.draw}/${odds.away}${odds.over25?` | O2.5:${odds.over25} U2.5:${odds.under25}`:''}`
-    : 'No odds';
+  const oddsStr = odds?.home
+    ? `Home:${odds.home} Draw:${odds.draw} Away:${odds.away}${odds.over25?` O2.5:${odds.over25} U2.5:${odds.under25}`:''}`
+    : 'No odds available';
 
-  const prompt = `You are a sharp football betting analyst. Analyse this match concisely.
+  const prompt = `You are a sharp football betting analyst. Analyse this match and find value.
 
 MATCH: ${homeTeam} vs ${awayTeam} (${league})
-H2H last 5: ${fmtH2H}
-${homeTeam} form: ${fmtForm(homeForm, homeForm[0]?.teams?.home?.id)}
-${awayTeam} form: ${fmtForm(awayForm, awayForm[0]?.teams?.away?.id)}
+H2H: ${fmtH2H}
+${homeTeam} recent form: ${fmtForm(homeForm, homeTeam)}
+${awayTeam} recent form: ${fmtForm(awayForm, awayTeam)}
 Bookmaker odds: ${oddsStr}
 
-Respond ONLY in this exact JSON format:
-{"summary":"2 sentence analysis","tip":"e.g. Arsenal Win or Over 2.5 Goals","market":"h2h or totals","confidence":65,"model_prob":68,"reasoning":"why this has value vs the odds","risk":"low|medium|high"}
+Respond ONLY with valid JSON, no other text:
+{"summary":"2 sentence analysis","tip":"e.g. Liverpool Win or Over 2.5 Goals","market":"h2h or totals","confidence":65,"model_prob":68,"reasoning":"one sentence on value","risk":"low|medium|high"}
 
-Rules: confidence 40-85 only. Only pick value you genuinely see. Be sharp, not generic.`;
+Rules: confidence between 40-85. Be sharp and specific.`;
 
   try {
     const resp = await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
       headers:{'Content-Type':'application/json','x-api-key':AI_KEY,'anthropic-version':'2023-06-01'},
-      body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:1024,messages:[{role:'user',content:prompt}]})
+      body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:1024,messages:[{role:'user',content:prompt}]})
     });
     const data = await resp.json();
-    console.log('[AI] status:', resp.status, 'response:', JSON.stringify(data).slice(0,400));
+    console.log('[AI] HTTP:', resp.status, '| raw:', JSON.stringify(data).slice(0,300));
     const text = data.content?.[0]?.text||'';
-    if(!text) { console.error('[AI] Empty response'); return null; }
-    // Extract JSON from response - handle markdown code blocks and extra text
+    if(!text){ console.error('[AI] No text in response'); return null; }
     const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if(!jsonMatch) { console.error('[AI] No JSON found in:', text.slice(0,200)); return null; }
+    if(!jsonMatch){ console.error('[AI] No JSON found:', text.slice(0,200)); return null; }
     return JSON.parse(jsonMatch[0]);
-  } catch(e) { console.error('[AI]',e.message); return null; }
+  } catch(e) { console.error('[AI] Error:',e.message); return null; }
 }
 
 function getBestOddsForTip(oddsMatch, tip, market, modelProb) {
-  if(!oddsMatch) return null;
+  if(!oddsMatch||!tip) return null;
   const tipL=(tip||'').toLowerCase();
   let best=null;
   for(const bm of oddsMatch.bookmakers||[]){
@@ -180,14 +181,13 @@ function getBestOddsForTip(oddsMatch, tip, market, modelProb) {
       const nL=(o.name||'').toLowerCase();
       const isMatch = market==='totals'
         ? (tipL.includes('over 2.5')&&nL==='over'&&o.point===2.5)||(tipL.includes('under 2.5')&&nL==='under'&&o.point===2.5)
-          ||(tipL.includes('over 1.5')&&nL==='over'&&o.point===1.5)||(tipL.includes('over 3.5')&&nL==='over'&&o.point===3.5)
-        : tipL.split(' ').some(w=>w.length>3&&nL.includes(w));
+        : tipL.split(' ').filter(w=>w.length>3).some(w=>nL.includes(w));
       if(isMatch&&o.price&&(!best||o.price>best)) best=o.price;
     }
   }
   if(!best) return null;
   const implied=Math.round(1/best*100);
-  return {odds:parseFloat(best.toFixed(2)),implied,edgePct:Math.round(modelProb-implied)};
+  return {odds:parseFloat(best.toFixed(2)),implied,edgePct:Math.round((modelProb||50)-implied)};
 }
 
 // ── ROUTES ─────────────────────────────────────────────────────────────────
@@ -196,126 +196,107 @@ app.get('/api/fixtures', async (req, res) => {
   try {
     const date = req.query.date||new Date().toISOString().split('T')[0];
     const fixtures = await fetchESPN(date);
-
-    // Fetch odds for leagues that have them
     const sportKeys=[...new Set(fixtures.map(f=>f.oddsKey).filter(Boolean))];
     const allOdds=(await Promise.all(sportKeys.map(getOdds))).flat();
-
-    // Attach odds
     fixtures.forEach(f=>{
       const om=matchOdds(allOdds,f.homeTeam,f.awayTeam);
-      if(om){
-        f.odds=extractOdds(om,f.homeTeam,f.awayTeam);
-        f.hasOdds=!!(f.odds.home);
-      }
+      if(om){ f.odds=extractOdds(om,f.homeTeam,f.awayTeam); f.hasOdds=!!(f.odds.home); }
     });
-
     res.json({date,fixtures,count:fixtures.length});
-  } catch(e){ console.error('[FIXTURES]',e.message); res.status(500).json({error:e.message}); }
+  } catch(e){ res.status(500).json({error:e.message}); }
 });
 
 app.get('/api/match/:id', async (req, res) => {
   try {
     const fixtureId = req.params.id;
-    const cached = db.getCachedAnalysis(fixtureId);
-    if(cached) return res.json({...cached,fromCache:true});
+    console.log('[MATCH] Loading:', fixtureId);
 
-    // Find fixture from ESPN first
-    const date = req.query.date||new Date().toISOString().split('T')[0];
-    const fixtures = await fetchESPN(date);
-    let fixture = fixtures.find(f=>String(f.id)===String(fixtureId));
-
-    // If not found in today, try fetching directly from ESPN event endpoint
-    if(!fixture){
-      try {
-        // Try each league until we find it
-        for(const league of ESPN_LEAGUES){
-          const resp=await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${league.id}/summary?event=${fixtureId}`);
-          const data=await resp.json();
-          if(data.header?.competitions?.[0]){
-            const comp=data.header.competitions[0];
-            const home=comp.competitors?.find(c=>c.homeAway==='home');
-            const away=comp.competitors?.find(c=>c.homeAway==='away');
-            if(home&&away){
-              fixture={
-                id:fixtureId,homeTeam:home.team.displayName,awayTeam:away.team.displayName,
-                homeLogo:home.team.logo,awayLogo:away.team.logo,
-                homeGoals:parseInt(home.score)||null,awayGoals:parseInt(away.score)||null,
-                league:league.name,leagueId:league.id,oddsKey:league.oddsKey,
-                status:espnStatus(comp.status?.type?.name),
-                venue:data.gameInfo?.venue?.fullName||null,
-              };
-              break;
-            }
-          }
-        }
-      } catch(e){}
+    // Get fixture from store (populated when /api/fixtures was called)
+    let fixture = fixtureStore[fixtureId];
+    
+    // If not in store, fetch today's fixtures to populate store
+    if(!fixture) {
+      const date = new Date().toISOString().split('T')[0];
+      await fetchESPN(date);
+      fixture = fixtureStore[fixtureId];
     }
 
-    if(!fixture) return res.status(404).json({error:'Fixture not found'});
+    if(!fixture) {
+      console.log('[MATCH] Not found in store, keys:', Object.keys(fixtureStore).slice(0,5));
+      return res.status(404).json({error:`Fixture ${fixtureId} not found`});
+    }
 
-    // Get H2H and form from API-Football by searching team names
+    console.log('[MATCH] Found:', fixture.homeTeam, 'vs', fixture.awayTeam);
+
+    // Get odds
+    const oddsData = fixture.oddsKey ? await getOdds(fixture.oddsKey) : [];
+    const oddsMatch = matchOdds(oddsData, fixture.homeTeam, fixture.awayTeam);
+    const odds = extractOdds(oddsMatch, fixture.homeTeam, fixture.awayTeam);
+
+    // Get H2H and form from API-Football
     let h2h=[], homeForm=[], awayForm=[];
     try {
-      // Search for team IDs by name
       const [homeSearch, awaySearch] = await Promise.all([
         afFetch(`/teams?name=${encodeURIComponent(fixture.homeTeam)}`),
         afFetch(`/teams?name=${encodeURIComponent(fixture.awayTeam)}`),
       ]);
-      const homeId = homeSearch[0]?.team?.id;
-      const awayId = awaySearch[0]?.team?.id;
+      const homeId=homeSearch[0]?.team?.id;
+      const awayId=awaySearch[0]?.team?.id;
+      console.log('[AF] homeId:', homeId, 'awayId:', awayId);
       if(homeId&&awayId){
-        [h2h,homeForm,awayForm] = await Promise.all([
+        [h2h,homeForm,awayForm]=await Promise.all([
           afFetch(`/fixtures/headtohead?h2h=${homeId}-${awayId}&last=10`),
-          afFetch(`/fixtures?team=${homeId}&last=8`),
-          afFetch(`/fixtures?team=${awayId}&last=8`),
+          afFetch(`/fixtures?team=${homeId}&last=8&status=FT`),
+          afFetch(`/fixtures?team=${awayId}&last=8&status=FT`),
         ]);
+        console.log('[AF] h2h:', h2h.length, 'homeForm:', homeForm.length, 'awayForm:', awayForm.length);
       }
-    } catch(e){ console.error('[AF H2H]',e.message); }
-
-    // Get odds
-    const oddsData = fixture.oddsKey ? await getOdds(fixture.oddsKey) : [];
-    const oddsMatch = matchOdds(oddsData,fixture.homeTeam,fixture.awayTeam);
-    const odds = extractOdds(oddsMatch,fixture.homeTeam,fixture.awayTeam);
+    } catch(e){ console.error('[AF]', e.message); }
 
     // AI analysis
     let ai=null;
-    if(AI_KEY) ai=await analyseWithAI(fixture.homeTeam,fixture.awayTeam,fixture.league,h2h,homeForm,awayForm,odds);
+    if(AI_KEY){
+      console.log('[AI] Calling Claude...');
+      ai=await analyseWithAI(fixture.homeTeam,fixture.awayTeam,fixture.league,h2h,homeForm,awayForm,odds);
+      console.log('[AI] Result:', JSON.stringify(ai));
+    } else {
+      console.log('[AI] No key set');
+    }
 
-    // Edge calculation
     let oddsInfo=null;
     if(ai?.tip&&oddsMatch) oddsInfo=getBestOddsForTip(oddsMatch,ai.tip,ai.market,ai.model_prob);
 
-    const fmtForm=(fixtures,teamId)=>fixtures.map(m=>({
+    const fmtForm=(fixtures,teamName)=>fixtures.map(m=>({
       date:m.fixture?.date?.split('T')[0],
-      homeTeam:m.teams?.home?.name,awayTeam:m.teams?.away?.name,
-      homeGoals:m.goals?.home,awayGoals:m.goals?.away,
-      isHome:m.teams?.home?.id===teamId,
+      homeTeam:m.teams?.home?.name, awayTeam:m.teams?.away?.name,
+      homeGoals:m.goals?.home, awayGoals:m.goals?.away,
+      isHome:m.teams?.home?.name?.toLowerCase().includes((teamName||'').split(' ')[0].toLowerCase()),
       result:m.goals?.home==null?null:
-        m.teams?.home?.id===teamId?(m.goals.home>m.goals.away?'W':m.goals.home<m.goals.away?'L':'D')
-                                  :(m.goals.away>m.goals.home?'W':m.goals.away<m.goals.home?'L':'D'),
+        m.teams?.home?.name?.toLowerCase().includes((teamName||'').split(' ')[0].toLowerCase())
+          ?(m.goals.home>m.goals.away?'W':m.goals.home<m.goals.away?'L':'D')
+          :(m.goals.away>m.goals.home?'W':m.goals.away<m.goals.home?'L':'D'),
     }));
 
     const response={
       fixture_id:fixtureId,
-      home_team:fixture.homeTeam,away_team:fixture.awayTeam,
-      home_logo:fixture.homeLogo,away_logo:fixture.awayLogo,
-      league:fixture.league,fixture_date:fixture.date?.split('T')[0],
-      status:fixture.status,venue:fixture.venue,
+      home_team:fixture.homeTeam, away_team:fixture.awayTeam,
+      home_logo:fixture.homeLogo, away_logo:fixture.awayLogo,
+      league:fixture.league, fixture_date:fixture.date?.split('T')[0],
+      status:fixture.status, venue:fixture.venue,
       h2h:h2h.slice(0,5).map(m=>({date:m.fixture?.date?.split('T')[0],homeTeam:m.teams?.home?.name,awayTeam:m.teams?.away?.name,homeGoals:m.goals?.home,awayGoals:m.goals?.away})),
-      home_form:fmtForm(homeForm,homeForm[0]?.teams?.home?.id),
-      away_form:fmtForm(awayForm,awayForm[0]?.teams?.away?.id),
+      home_form:fmtForm(homeForm,fixture.homeTeam),
+      away_form:fmtForm(awayForm,fixture.awayTeam),
       odds,
-      analysis:ai?.summary||null,tip:ai?.tip||null,market:ai?.market||null,
-      confidence:ai?.confidence||null,model_prob:ai?.model_prob||null,
-      reasoning:ai?.reasoning||null,risk:ai?.risk||null,
-      best_odds:oddsInfo?.odds||null,implied_prob:oddsInfo?.implied||null,
-      edge_pct:oddsInfo?.edgePct||null,has_value:(oddsInfo?.edgePct||0)>=5,
+      analysis:ai?.summary||null, tip:ai?.tip||null, market:ai?.market||null,
+      confidence:ai?.confidence||null, model_prob:ai?.model_prob||null,
+      reasoning:ai?.reasoning||null, risk:ai?.risk||null,
+      best_odds:oddsInfo?.odds||null, implied_prob:oddsInfo?.implied||null,
+      edge_pct:oddsInfo?.edgePct||null, has_value:(oddsInfo?.edgePct||0)>=5,
     };
 
     db.cacheAnalysis(response);
     res.json(response);
-  } catch(e){ console.error('[MATCH]',e.message); res.status(500).json({error:e.message}); }
+  } catch(e){ console.error('[MATCH ERROR]',e.message,e.stack); res.status(500).json({error:e.message}); }
 });
 
 app.post('/api/bet',(req,res)=>{
@@ -326,20 +307,18 @@ app.post('/api/bet',(req,res)=>{
   }catch(e){res.status(500).json({error:e.message});}
 });
 
-app.post('/api/settle', async(req,res)=>{
+app.post('/api/settle',async(req,res)=>{
   try{
     const pending=db.getBets({pending:true});
     let settled=0;
     for(const bet of pending){
-      // Use ESPN to get result
       for(const league of ESPN_LEAGUES){
         try{
           const resp=await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${league.id}/summary?event=${bet.fixture_id}`);
           const data=await resp.json();
           const comp=data.header?.competitions?.[0];
           if(!comp) continue;
-          const status=espnStatus(comp.status?.type?.name);
-          if(!['FT','AET'].includes(status)) break;
+          if(!['FT','AET'].includes(espnStatus(comp.status?.type?.name))) break;
           const home=comp.competitors?.find(c=>c.homeAway==='home');
           const away=comp.competitors?.find(c=>c.homeAway==='away');
           const hG=parseInt(home?.score), aG=parseInt(away?.score);
