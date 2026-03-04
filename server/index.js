@@ -289,26 +289,26 @@ H2H avg goals: ${h2hAvg||'N/A'} | H2H BTTS: ${h2hBTTS}/${h2h.length}` : '';
 MATCH: ${homeTeam} vs ${awayTeam}
 COMPETITION: ${league}
 
-━━━ BOOKMAKER ODDS ━━━
+BOOKMAKER ODDS:
 ${oddsStr}
 
-━━━ ${homeTeam} LAST 6 RESULTS ━━━
+${homeTeam} LAST 6 RESULTS:
 ${fmtForm(homeForm)}
 
-━━━ ${awayTeam} LAST 6 RESULTS ━━━
+${awayTeam} LAST 6 RESULTS:
 ${fmtForm(awayForm)}
 
-━━━ HEAD TO HEAD (recent first) ━━━
+HEAD TO HEAD (recent first):
 ${h2h.length ? h2h.slice(0,6).map(m=>`${m.date||''}: ${m.homeTeam} ${m.homeGoals??'?'}-${m.awayGoals??'?'} ${m.awayTeam}`).join('\n') : 'No H2H data — use your knowledge'}
 ${statsBlock}
 ${formNote}
 
-━━━ YOUR MISSION ━━━
+YOUR MISSION:
 Find the single bet with the HIGHEST chance of winning across ALL available markets.
 You are not restricted. Pick whatever you believe is most likely to land.
 Think about: goals patterns, team strength gap, defensive solidity, home advantage, cup/league context, recent results, typical match tempo for these teams.
 
-━━━ AVAILABLE MARKETS ━━━
+AVAILABLE MARKETS:
 MATCH RESULT (1X2):
   "${homeTeam} Win" | "Draw" | "${awayTeam} Win"
 
@@ -330,7 +330,7 @@ BOTH TEAMS TO SCORE:
 ASIAN HANDICAP:
   "${homeTeam} -0.5" | "${awayTeam} -0.5"
 
-━━━ DECISION FRAMEWORK ━━━
+DECISION FRAMEWORK:
 Step 1 — Check form stats: avg goals per game, BTTS rate, clean sheets
 Step 2 — Check H2H: does this fixture tend to be high or low scoring?
 Step 3 — Check odds: which market offers the best value vs probability?
@@ -345,7 +345,7 @@ HARD RULES:
 • NEVER pick something just to play it safe with no reasoning
 • Be decisive. No hedging. One pick, full conviction.
 
-━━━ RESPOND WITH ONLY THIS JSON ━━━
+RESPOND WITH ONLY THIS JSON:
 {
   "tip": "exact market string from the list above",
   "market": "h2h|dc|dnb|totals|btts|ah",
@@ -376,12 +376,21 @@ HARD RULES:
       console.log('[AI] Groq status:', resp.status, '| Body:', JSON.stringify(data).slice(0, 300));
       if (resp.status !== 200) { console.error('[AI] Groq error:', data); }
       else {
-        const text = (data.choices?.[0]?.message?.content || '').trim();
+        const rawText = (data.choices?.[0]?.message?.content || '').trim();
+        // Strip markdown code blocks if model wraps response
+        const text = rawText.replace(/^```(?:json)?\n?/,'').replace(/\n?```$/,'').trim();
+        console.log('[AI] Groq raw response:', text.slice(0,200));
         const jsonMatch = text.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
-          const parsed = JSON.parse(jsonMatch[0]);
-          console.log('[AI] Groq success:', parsed.tip);
-          return parsed;
+          try {
+            const parsed = JSON.parse(jsonMatch[0]);
+            console.log('[AI] Groq success:', parsed.tip);
+            return parsed;
+          } catch(parseErr) {
+            console.error('[AI] JSON parse failed:', parseErr.message, '| text:', text.slice(0,200));
+          }
+        } else {
+          console.error('[AI] No JSON found in response:', text.slice(0,200));
         }
       }
     } catch(e) { console.error('[AI] Groq exception:', e.message); }
@@ -804,7 +813,7 @@ app.post('/api/settle', async (req, res) => {
 
 app.get('/api/status', (req, res) => {
   const stats = db.getStats();
-  res.json({ status: 'ok', version: '2.0', hasAI: !!AI_KEY, bankroll: stats.bankroll, totalBets: stats.totalBets, winRate: stats.winRate });
+  res.json({ status: 'ok', version: '2.0', hasAI: !!(GROQ_KEY||AI_KEY||GEMINI_KEY), bankroll: stats.bankroll, totalBets: stats.totalBets, winRate: stats.winRate });
 });
 
 app.post('/api/bankroll/reset', (req, res) => {
@@ -814,6 +823,27 @@ app.post('/api/bankroll/reset', (req, res) => {
 });
 
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, '../public/index.html')));
+
+
+// ── DEBUG: test AI directly ────────────────────────────────────────────────
+app.get('/api/test-ai', async (req, res) => {
+  try {
+    const result = await analyseWithAI(
+      'Arsenal', 'Chelsea', 'Premier League',
+      { home: 2.1, draw: 3.4, away: 3.6, over25: 1.75, under25: 2.1, bttsYes: 1.8, bttsNo: 2.0, dc1X: 1.28, dcX2: 1.72 },
+      [{ date:'2026-02-22', homeTeam:'Arsenal', awayTeam:'Man City', homeGoals:2, awayGoals:1, isHome:true, result:'W' }],
+      [{ date:'2026-02-22', homeTeam:'Arsenal', awayTeam:'Man City', homeGoals:2, awayGoals:1, isHome:true, result:'W' },
+       { date:'2026-02-15', homeTeam:'Arsenal', awayTeam:'Brighton', homeGoals:3, awayGoals:1, isHome:true, result:'W' },
+       { date:'2026-02-08', homeTeam:'Wolves', awayTeam:'Arsenal', homeGoals:0, awayGoals:2, isHome:false, result:'W' }],
+      [{ date:'2026-02-22', homeTeam:'Chelsea', awayTeam:'Spurs', homeGoals:2, awayGoals:2, isHome:true, result:'D' },
+       { date:'2026-02-15', homeTeam:'Brentford', awayTeam:'Chelsea', homeGoals:1, awayGoals:2, isHome:false, result:'W' },
+       { date:'2026-02-08', homeTeam:'Chelsea', awayTeam:'Everton', homeGoals:3, awayGoals:0, isHome:true, result:'W' }]
+    );
+    res.json({ ok: true, result, groqKey: GROQ_KEY ? 'set ('+GROQ_KEY.slice(0,8)+'...)' : 'MISSING' });
+  } catch(e) {
+    res.json({ ok: false, error: e.message, groqKey: GROQ_KEY ? 'set' : 'MISSING' });
+  }
+});
 
 app.listen(PORT, async () => {
   console.log(`PROPRED v2 on :${PORT} | AI: ${AI_KEY ? '✅ key length='+AI_KEY.length : '❌ NO KEY'}`);
