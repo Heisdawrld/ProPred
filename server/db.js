@@ -191,15 +191,19 @@ function getStats() {
 function getCachedAnalysis(fixtureId) {
   const row = db.prepare('SELECT * FROM analysis_cache WHERE fixture_id=?').get(String(fixtureId));
   if(!row) return null;
-  if(Date.now()-new Date(row.created_at).getTime() > 6*60*60*1000) return null;
+  if(Date.now()-new Date(row.created_at).getTime() > 2*60*60*1000) return null; // 2hr cache
   return row;
 }
 
 function cacheAnalysis(data) {
   try {
+    // Add columns if they don't exist yet
+    try { db.prepare('ALTER TABLE analysis_cache ADD COLUMN confidence INTEGER').run(); } catch(e) {}
+    try { db.prepare('ALTER TABLE analysis_cache ADD COLUMN reasoning TEXT').run(); } catch(e) {}
+    try { db.prepare('ALTER TABLE analysis_cache ADD COLUMN risk TEXT').run(); } catch(e) {}
     db.prepare(`INSERT OR REPLACE INTO analysis_cache
-      (fixture_id,home_team,away_team,league,fixture_date,analysis,tip,market,odds,edge_pct,model_prob,created_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+      (fixture_id,home_team,away_team,league,fixture_date,analysis,tip,market,odds,edge_pct,model_prob,confidence,reasoning,risk,created_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
     `).run(
       String(data.fixture_id||''),
       data.home_team||'',
@@ -211,7 +215,10 @@ function cacheAnalysis(data) {
       data.market||'',
       data.best_odds||null,
       data.edge_pct||null,
-      data.model_prob||null
+      data.model_prob||null,
+      data.confidence||null,
+      data.reasoning||null,
+      data.risk||null
     );
   } catch(e) { console.error('[CACHE]', e.message); }
 }
