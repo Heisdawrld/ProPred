@@ -464,16 +464,49 @@ async function loadMatch(id){
     const o=m.odds||{};
     const tipL=(m.tip||'').toLowerCase();
 
-    // Odds boxes
-    const homeTipMatch=tipL.includes('home')||tipL.includes((m.home_team||'').toLowerCase().split(' ')[0]);
-    const awayTipMatch=tipL.includes('away')||tipL.includes((m.away_team||'').toLowerCase().split(' ')[0]);
-    const oddsHtml=o.home?`<div class="odds-tbl">
-      <div class="ob${homeTipMatch?' best':''}"><div class="ob-l">Home Win</div><div class="ob-v">${o.home?.toFixed(2)||'—'}</div></div>
-      <div class="ob${tipL.includes('draw')?' best':''}"><div class="ob-l">Draw</div><div class="ob-v">${o.draw?.toFixed(2)||'—'}</div></div>
-      <div class="ob${awayTipMatch?' best':''}"><div class="ob-l">Away Win</div><div class="ob-v">${o.away?.toFixed(2)||'—'}</div></div>
-      <div class="ob${tipL.includes('over')?' best':''}"><div class="ob-l">Over 2.5</div><div class="ob-v">${o.over25?.toFixed(2)||'—'}</div></div>
-      <div class="ob${tipL.includes('under')?' best':''}"><div class="ob-l">Under 2.5</div><div class="ob-v">${o.under25?.toFixed(2)||'—'}</div></div>
-    </div>`:'<p style="color:var(--dim);font-size:.76rem;margin-top:.5rem">No odds available</p>';
+    // Build odds display - show all available markets grouped
+    const isBest = (keys) => keys.some(k => tipL.includes(k));
+    const ob = (label, val, keys=[]) => val ? `<div class="ob${isBest(keys)?' best':''}"><div class="ob-l">${label}</div><div class="ob-v">${parseFloat(val).toFixed(2)}</div></div>` : '';
+
+    const oddsHtml = o.home ? `
+      <div style="margin-top:.75rem">
+        <div style="font-size:.55rem;color:var(--dim);font-weight:700;letter-spacing:.08em;text-transform:uppercase;margin-bottom:.4rem">Match Result</div>
+        <div class="odds-tbl" style="grid-template-columns:repeat(3,1fr);margin-bottom:.6rem">
+          ${ob('Home Win', o.home, [m.home_team?.toLowerCase().split(' ')[0]||''])}
+          ${ob('Draw', o.draw, ['draw'])}
+          ${ob('Away Win', o.away, [m.away_team?.toLowerCase().split(' ')[0]||''])}
+        </div>
+        ${(o.dc1X||o.dcX2||o.dnbHome) ? `
+        <div style="font-size:.55rem;color:var(--dim);font-weight:700;letter-spacing:.08em;text-transform:uppercase;margin-bottom:.4rem">Double Chance / DNB</div>
+        <div class="odds-tbl" style="grid-template-columns:repeat(${[o.dc1X,o.dcX2,o.dnbHome,o.dnbAway].filter(Boolean).length},1fr);margin-bottom:.6rem">
+          ${ob(m.home_team+' or Draw', o.dc1X, ['or draw','1x','dc1'])}
+          ${ob(m.away_team+' or Draw', o.dcX2, ['or draw','x2','dcx'])}
+          ${ob(m.home_team+' DNB', o.dnbHome, ['dnb'])}
+          ${ob(m.away_team+' DNB', o.dnbAway, ['dnb'])}
+        </div>` : ''}
+        <div style="font-size:.55rem;color:var(--dim);font-weight:700;letter-spacing:.08em;text-transform:uppercase;margin-bottom:.4rem">Goals</div>
+        <div class="odds-tbl" style="grid-template-columns:repeat(${[o.over15,o.under15,o.over25,o.under25,o.over35,o.under35,o.over45].filter(Boolean).length||4},1fr);margin-bottom:.6rem">
+          ${ob('Over 1.5', o.over15, ['over 1.5'])}
+          ${ob('Under 1.5', o.under15, ['under 1.5'])}
+          ${ob('Over 2.5', o.over25, ['over 2.5'])}
+          ${ob('Under 2.5', o.under25, ['under 2.5'])}
+          ${ob('Over 3.5', o.over35, ['over 3.5'])}
+          ${ob('Under 3.5', o.under35, ['under 3.5'])}
+          ${ob('Over 4.5', o.over45, ['over 4.5'])}
+        </div>
+        ${(o.bttsYes||o.bttsNo) ? `
+        <div style="font-size:.55rem;color:var(--dim);font-weight:700;letter-spacing:.08em;text-transform:uppercase;margin-bottom:.4rem">Both Teams to Score</div>
+        <div class="odds-tbl" style="grid-template-columns:repeat(2,1fr);margin-bottom:.6rem">
+          ${ob('BTTS Yes', o.bttsYes, ['both teams to score','btts yes'])}
+          ${ob('BTTS No', o.bttsNo, ['both teams not','btts no'])}
+        </div>` : ''}
+        ${(o.ahHome||o.ahAway) ? `
+        <div style="font-size:.55rem;color:var(--dim);font-weight:700;letter-spacing:.08em;text-transform:uppercase;margin-bottom:.4rem">Asian Handicap</div>
+        <div class="odds-tbl" style="grid-template-columns:repeat(2,1fr)">
+          ${ob(m.home_team+' -0.5', o.ahHome, ['-0.5','asian'])}
+          ${ob(m.away_team+' -0.5', o.ahAway, ['-0.5','asian'])}
+        </div>` : ''}
+      </div>` : '<p style="color:var(--dim);font-size:.76rem;margin-top:.5rem">No odds available</p>';
 
 
     // Acca state
