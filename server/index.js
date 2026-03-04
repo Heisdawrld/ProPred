@@ -187,82 +187,118 @@ async function loadFixtures(date) {
 
 // ── AI ANALYSIS ────────────────────────────────────────────────────────────
 async function analyseWithAI(homeTeam, awayTeam, league, odds, h2h=[], homeForm=[], awayForm=[]) {
-  const oddsStr = odds?.home
-    ? `Home Win: ${odds.home} | Draw: ${odds.draw} | Away Win: ${odds.away}${odds.over25 ? ` | Over 2.5: ${odds.over25} | Under 2.5: ${odds.under25}` : ''}`
-    : 'No odds available';
+  const hasOdds = odds?.home != null;
+  const hasForm = homeForm.length > 0 && awayForm.length > 0;
+  const hasH2H  = h2h.length > 0;
 
-  const fmtH2H = h2h.slice(0,5).map(m=>`${m.homeTeam} ${m.homeGoals??'?'}-${m.awayGoals??'?'} ${m.awayTeam} (${m.date||''})`).join(' | ') || 'No data';
+  // Format odds string with ALL available lines
+  const oddsStr = hasOdds
+    ? [
+        `Home Win (${homeTeam}): ${odds.home}`,
+        `Draw: ${odds.draw}`,
+        `Away Win (${awayTeam}): ${odds.away}`,
+        odds.over25  ? `Over 2.5 Goals: ${odds.over25}`  : null,
+        odds.under25 ? `Under 2.5 Goals: ${odds.under25}` : null,
+      ].filter(Boolean).join(' | ')
+    : 'No odds available — use your knowledge to estimate';
 
-  const fmtForm = (form, name) => {
-    if (!form || !form.length) return 'No data';
-    return form.slice(0,5).map(f => {
-      const loc = f.isHome ? 'H' : 'A';
+  // Format form with location, opponent and score
+  const fmtForm = (form) => {
+    if (!form?.length) return 'No data from API';
+    return form.slice(0,6).map(f => {
+      const loc = f.isHome ? 'HOME' : 'AWAY';
       const opp = f.isHome ? f.awayTeam : f.homeTeam;
-      return `${f.result||'?'}(${loc} vs ${opp} ${f.homeGoals??'?'}-${f.awayGoals??'?'})`;
-    }).join(' | ');
+      const score = `${f.homeGoals??'?'}-${f.awayGoals??'?'}`;
+      return `${f.result} ${loc} vs ${opp} (${score}) ${f.date||''}`;
+    }).join('\n    ');
   };
 
-  // Work out goal stats from form
+  // Compute goal stats
   const goalStats = (form) => {
-    if (!form || form.length < 2) return null;
-    const scored = form.map(f => f.isHome ? (f.homeGoals||0) : (f.awayGoals||0));
-    const conceded = form.map(f => f.isHome ? (f.awayGoals||0) : (f.homeGoals||0));
-    const avg_scored = (scored.reduce((a,b)=>a+b,0)/scored.length).toFixed(1);
-    const avg_conceded = (conceded.reduce((a,b)=>a+b,0)/conceded.length).toFixed(1);
-    const btts_count = form.filter(f => (f.homeGoals||0)>0 && (f.awayGoals||0)>0).length;
-    const over25_count = form.filter(f => (f.homeGoals||0)+(f.awayGoals||0)>2).length;
-    return { avg_scored, avg_conceded, btts_count, over25_count, total: form.length };
+    if (!form?.length) return null;
+    const valid = form.filter(f => f.homeGoals != null && f.awayGoals != null);
+    if (!valid.length) return null;
+    const scored   = valid.map(f => f.isHome ? f.homeGoals : f.awayGoals);
+    const conceded = valid.map(f => f.isHome ? f.awayGoals : f.homeGoals);
+    const totalGoals = valid.map(f => f.homeGoals + f.awayGoals);
+    const avg_scored   = (scored.reduce((a,b)=>a+b,0)/valid.length).toFixed(2);
+    const avg_conceded = (conceded.reduce((a,b)=>a+b,0)/valid.length).toFixed(2);
+    const avg_total    = (totalGoals.reduce((a,b)=>a+b,0)/valid.length).toFixed(2);
+    const btts   = valid.filter(f => f.homeGoals > 0 && f.awayGoals > 0).length;
+    const over25 = valid.filter(f => f.homeGoals + f.awayGoals > 2).length;
+    const over15 = valid.filter(f => f.homeGoals + f.awayGoals > 1).length;
+    const cleanSheets = valid.filter(f => f.isHome ? f.awayGoals === 0 : f.homeGoals === 0).length;
+    return { avg_scored, avg_conceded, avg_total, btts, over25, over15, cleanSheets, n: valid.length };
   };
 
-  const hStats = goalStats(homeForm);
-  const aStats = goalStats(awayForm);
-  const statsStr = (hStats && aStats)
-    ? `${homeTeam} stats (last ${hStats.total}): avg scored ${hStats.avg_scored} avg conceded ${hStats.avg_conceded} BTTS in ${hStats.btts_count}/${hStats.total} over2.5 in ${hStats.over25_count}/${hStats.total} | ${awayTeam} stats (last ${aStats.total}): avg scored ${aStats.avg_scored} avg conceded ${aStats.avg_conceded} BTTS in ${aStats.btts_count}/${aStats.total} over2.5 in ${aStats.over25_count}/${aStats.total}`
-    : 'No stats available';
+  const hS = goalStats(homeForm);
+  const aS = goalStats(awayForm);
+  const h2hGoals = h2h.filter(m => m.homeGoals != null).map(m => m.homeGoals + m.awayGoals);
+  const h2hAvg = h2hGoals.length ? (h2hGoals.reduce((a,b)=>a+b,0)/h2hGoals.length).toFixed(2) : null;
+  const h2hBTTS = h2h.filter(m => m.homeGoals > 0 && m.awayGoals > 0).length;
 
-  const prompt = `You are an expert football betting analyst with deep knowledge of European football. Your job is to find the SAFEST, highest-value bet for this match - not the most exciting one.
+  const statsBlock = (hS && aS) ? `
+COMPUTED STATS (from actual match data):
+${homeTeam}: avg scored ${hS.avg_scored} | avg conceded ${hS.avg_conceded} | avg total goals ${hS.avg_total} | BTTS ${hS.btts}/${hS.n} | Over 2.5: ${hS.over25}/${hS.n} | Over 1.5: ${hS.over15}/${hS.n} | Clean sheets: ${hS.cleanSheets}/${hS.n}
+${awayTeam}: avg scored ${aS.avg_scored} | avg conceded ${aS.avg_conceded} | avg total goals ${aS.avg_total} | BTTS ${aS.btts}/${aS.n} | Over 2.5: ${aS.over25}/${aS.n} | Over 1.5: ${aS.over15}/${aS.n} | Clean sheets: ${aS.cleanSheets}/${aS.n}
+H2H avg goals: ${h2hAvg||'N/A'} | H2H BTTS: ${h2hBTTS}/${h2h.length}` : '';
 
-MATCH: ${homeTeam} vs ${awayTeam} (${league})
-DATE: Today
+  const formNote = !hasForm
+    ? `NOTE: No recent form data available from API. Use your extensive knowledge of ${homeTeam} and ${awayTeam} — their current season form, playing style, goals scored/conceded, typical match patterns in ${league}. Make a confident pick based on what you know.`
+    : '';
+
+  const prompt = `You are a professional football betting analyst who makes money finding value bets. You are sharp, decisive and back your opinion with reasoning.
+
+MATCH: ${homeTeam} vs ${awayTeam}
+COMPETITION: ${league}
 
 BOOKMAKER ODDS:
 ${oddsStr}
 
-RECENT FORM:
-${homeTeam} last 5: ${fmtForm(homeForm, homeTeam)}
-${awayTeam} last 5: ${fmtForm(awayForm, awayTeam)}
+${homeTeam} RECENT FORM (newest first):
+    ${fmtForm(homeForm)}
 
-GOAL STATISTICS:
-${statsStr}
+${awayTeam} RECENT FORM (newest first):
+    ${fmtForm(awayForm)}
 
-HEAD TO HEAD (last 5):
-${fmtH2H}
+HEAD TO HEAD (most recent first):
+${h2h.length ? h2h.slice(0,6).map(m=>`  ${m.date||''}: ${m.homeTeam} ${m.homeGoals??'?'}-${m.awayGoals??'?'} ${m.awayTeam}`).join('\n') : '  No H2H data'}
+${statsBlock}
+${formNote}
 
-AVAILABLE MARKETS TO CHOOSE FROM (pick the single safest bet):
-1. "${homeTeam} Win" - use if home team is strong favourite with good form
-2. "Draw" - use ONLY if both teams are very evenly matched AND odds are genuinely attractive
-3. "${awayTeam} Win" - use if away team has significantly better form/quality
-4. "Over 1.5 Goals" - very safe, use when both teams score regularly
-5. "Over 2.5 Goals" - use when both teams average 1.5+ goals and have high-scoring h2h
-6. "Under 2.5 Goals" - use when both defences are strong or matches tend to be low-scoring
-7. "Both Teams to Score" - use when both teams have scored in 3+ of last 5 AND conceded regularly
-8. "Both Teams NOT to Score" - use when either team has a strong defence or scores rarely
-9. "${homeTeam} or Draw" - double chance, use when home team is likely but not certain to win
-10. "${awayTeam} or Draw" - double chance, use when away team is likely but not certain to win
+YOUR JOB: Pick ONE bet with the highest probability of winning. Think like a sharp bettor who only bets when they have real conviction.
 
-INSTRUCTIONS:
-- Use your knowledge of these teams and their typical playing styles
-- Consider home advantage seriously - home teams win ~46% of matches
-- BTTS is usually the safest bet when both teams have scored in 4/5 recent games
-- Over 1.5 Goals happens in ~75% of matches - consider it when odds are decent
-- DO NOT pick Draw just because you are uncertain - that is lazy
-- Pick the market where you have the most conviction based on the data
-- confidence: how sure you are (50-80)
-- model_prob: your estimated probability this bet wins (50-80)
-- risk: "low" for goals markets and double chance, "medium" for 1X2, "high" for unlikely outcomes
+AVAILABLE BETS (choose exactly one):
+- "${homeTeam} Win"
+- "Draw"  
+- "${awayTeam} Win"
+- "Over 1.5 Goals"   ← covers ~75% of matches globally
+- "Over 2.5 Goals"   ← covers ~55% of matches
+- "Under 2.5 Goals"  ← only pick if you genuinely expect a tight low-scoring game
+- "Both Teams to Score"      ← pick when both teams regularly score AND concede
+- "Both Teams NOT to Score"  ← only if one team has very strong defence
+- "${homeTeam} or Draw"
+- "${awayTeam} or Draw"
 
-Respond with ONLY valid JSON. No markdown. No extra text.
-{"summary":"3 sentence analysis using the actual form data and goal stats","tip":"EXACT tip from the numbered list above","market":"h2h or totals or btts or dc","confidence":68,"model_prob":72,"reasoning":"specific data-backed reason: e.g. both teams scored in 4/5 recent games and h2h averages 3.1 goals","risk":"low"}`;
+RULES:
+1. If BTTS stat shows 4+/5 for both teams → "Both Teams to Score" is your pick
+2. If avg total goals > 2.7 → "Over 2.5 Goals" is likely
+3. If avg total goals > 1.8 → "Over 1.5 Goals" is very safe
+4. If one team is clearly stronger (odds gap > 0.8) → pick their Win or Double Chance
+5. "Under 2.5" is ONLY valid if clean sheet rate is high AND avg goals < 2.2
+6. NEVER pick "Under 2.5" just because you lack data — use your football knowledge instead
+7. DO NOT hedge. Pick ONE market with conviction.
+
+Return ONLY this JSON (no markdown, no explanation outside JSON):
+{
+  "tip": "exact bet from the list above",
+  "market": "h2h|totals|btts|dc",
+  "summary": "2-3 sentences: describe both teams current form and why this match sets up the way it does",
+  "reasoning": "1 sentence: the specific stat or fact that makes this bet the right pick",
+  "confidence": 72,
+  "model_prob": 74,
+  "risk": "low|medium|high"
+}`;
 
   // Try Groq first (free, no credit card)
   if (GROQ_KEY) {
