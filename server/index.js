@@ -144,14 +144,22 @@ async function analyseWithAI(homeTeam, awayTeam, league, odds, h2h=[], homeForm=
   const fmtH2H = h2h.slice(0,5).map(m=>`${m.homeTeam} ${m.homeGoals}-${m.awayGoals} ${m.awayTeam}`).join(' | ') || 'No data';
   const fmtForm = (form, name) => form.slice(0,5).map(f=>`${f.result}(${f.homeGoals}-${f.awayGoals})`).join(' ') || 'No data';
 
-  const prompt = `You are a sharp football betting analyst. Analyse this match and find genuine value.
+  const prompt = `You are a disciplined football betting analyst. Analyse this match carefully.
 MATCH: ${homeTeam} vs ${awayTeam} (${league})
 BOOKMAKER ODDS: ${oddsStr}
 H2H LAST 5: ${fmtH2H}
 ${homeTeam} FORM: ${fmtForm(homeForm, homeTeam)}
 ${awayTeam} FORM: ${fmtForm(awayForm, awayTeam)}
+
+Rules:
+- Pick ONLY ONE of these exact tips: "${homeTeam} Win", "Draw", "${awayTeam} Win", "Over 2.5 Goals", "Under 2.5 Goals"
+- Never combine two outcomes into one tip
+- Be conservative - if unsure, pick the most likely outcome based on odds and form
+- confidence must be between 40 and 75
+- model_prob must be between 40 and 75
+
 Respond with ONLY a valid JSON object. No markdown. No extra text. Start with { end with }.
-{"summary":"2 sentence match analysis using the data","tip":"e.g. ${homeTeam} Win or Over 2.5 Goals","market":"h2h or totals","confidence":65,"model_prob":68,"reasoning":"specific reason this has value vs the odds","risk":"low"}`;
+{"summary":"2 sentence analysis referencing the form and H2H data","tip":"EXACT tip from the list above","market":"h2h or totals","confidence":62,"model_prob":65,"reasoning":"one sentence on why this specific bet has value","risk":"low or medium or high"}`;
 
   // Try Groq first (free, no credit card)
   if (GROQ_KEY) {
