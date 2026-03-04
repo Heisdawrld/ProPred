@@ -292,9 +292,30 @@ Respond with ONLY valid JSON. No markdown. No extra text.
 }
 
 
-// ── ESPN FORM + H2H ──────────────────────────────────────────────────────────
-// Uses ESPN team schedule endpoint to get last 5 results for each team
-async function getFormAndH2H(homeTeam, awayTeam, homeEspnId, awayEspnId, leagueSlug) {
+// ── FOOTBALL-DATA.ORG FORM + H2H ─────────────────────────────────────────────
+// Maps league names to football-data.org competition codes
+const FDORG_KEY = (process.env.FDORG_KEY || '').trim();
+
+const LEAGUE_TO_FDORG = {
+  'Premier League': 'PL', 'La Liga': 'PD', 'Bundesliga': 'BL1',
+  'Serie A': 'SA', 'Ligue 1': 'FL1', 'UEFA Champions League': 'CL',
+  'UEFA Europa League': 'EL', 'Championship': 'ELC',
+  'Scottish Prem': 'PPL', 'Eredivisie': 'DED',
+};
+
+async function getFormAndH2H(homeTeam, awayTeam, homeEspnId, awayEspnId, leagueSlug, league) {
+  // Try football-data.org first if key is set
+  if (FDORG_KEY) {
+    try {
+      const result = await getFormFDOrg(homeTeam, awayTeam, league);
+      if (result.homeForm.length > 0 || result.awayForm.length > 0) {
+        console.log(`[FDORG] ${homeTeam}: ${result.homeForm.length} | ${awayTeam}: ${result.awayForm.length} | H2H: ${result.h2h.length}`);
+        return result;
+      }
+    } catch(e) { console.error('[FDORG] Error:', e.message); }
+  }
+
+  // Fallback: ESPN team schedule
   if (!homeEspnId || !awayEspnId || !leagueSlug) return { h2h: [], homeForm: [], awayForm: [] };
   try {
     const [hRes, aRes] = await Promise.all([
@@ -304,59 +325,113 @@ async function getFormAndH2H(homeTeam, awayTeam, homeEspnId, awayEspnId, leagueS
     const hData = await hRes.json();
     const aData = await aRes.json();
 
+    console.log(`[ESPN-FORM] home events: ${hData.events?.length||0} away events: ${aData.events?.length||0}`);
+
     const parseForm = (data, teamId) => {
-      const events = (data.events || []).filter(ev => {
-        const comp = ev.competitions?.[0];
-        const status = comp?.status?.type?.completed;
-        return status === true;
+      const all = data.events || [];
+      const finished = all.filter(ev => {
+        const s = ev.competitions?.[0]?.status?.type;
+        return s?.completed === true || s?.description === 'Final' || s?.shortDetail === 'FT';
       });
-      return events.slice(-6).reverse().slice(0,5).map(ev => {
+      return finished.slice(-6).reverse().slice(0,5).map(ev => {
         const comp = ev.competitions[0];
-        const home = comp.competitors.find(c => c.homeAway === 'home');
-        const away = comp.competitors.find(c => c.homeAway === 'away');
-        const isHome = home?.team?.id === String(teamId);
+        const home = comp.competitors?.find(c => c.homeAway === 'home');
+        const away = comp.competitors?.find(c => c.homeAway === 'away');
+        const isHome = String(home?.team?.id) === String(teamId);
         const hG = home?.score != null ? parseInt(home.score) : null;
         const aG = away?.score != null ? parseInt(away.score) : null;
         const gf = isHome ? hG : aG;
         const ga = isHome ? aG : hG;
         const result = gf == null ? null : gf > ga ? 'W' : gf < ga ? 'L' : 'D';
-        return {
-          date: comp.date?.split('T')[0],
-          homeTeam: home?.team?.displayName,
-          awayTeam: away?.team?.displayName,
-          homeGoals: hG, awayGoals: aG,
-          isHome, result,
-        };
+        return { date: comp.date?.split('T')[0], homeTeam: home?.team?.displayName, awayTeam: away?.team?.displayName, homeGoals: hG, awayGoals: aG, isHome, result };
       });
     };
 
     const homeForm = parseForm(hData, homeEspnId);
     const awayForm = parseForm(aData, awayEspnId);
+    const allHomeEvents = (hData.events||[]).filter(ev => ev.competitions?.[0]?.status?.type?.completed);
+    const h2h = allHomeEvents.filter(ev => ev.competitions[0].competitors.some(c => String(c.team?.id) === String(awayEspnId)))
+      .slice(-5).map(ev => {
+        const comp = ev.competitions[0];
+        const home = comp.competitors.find(c => c.homeAway === 'home');
+        const away = comp.competitors.find(c => c.homeAway === 'away');
+        return { date: comp.date?.split('T')[0], homeTeam: home?.team?.displayName, awayTeam: away?.team?.displayName, homeGoals: home?.score != null ? parseInt(home.score) : null, awayGoals: away?.score != null ? parseInt(away.score) : null };
+      });
 
-    // H2H: find matches where both teams played each other
-    const allHomeEvents = (hData.events || []).filter(ev => ev.competitions?.[0]?.status?.type?.completed);
-    const h2h = allHomeEvents.filter(ev => {
-      const comp = ev.competitions[0];
-      return comp.competitors.some(c => c.team?.id === String(awayEspnId));
-    }).slice(-5).map(ev => {
-      const comp = ev.competitions[0];
-      const home = comp.competitors.find(c => c.homeAway === 'home');
-      const away = comp.competitors.find(c => c.homeAway === 'away');
-      return {
-        date: comp.date?.split('T')[0],
-        homeTeam: home?.team?.displayName,
-        awayTeam: away?.team?.displayName,
-        homeGoals: home?.score != null ? parseInt(home.score) : null,
-        awayGoals: away?.score != null ? parseInt(away.score) : null,
-      };
-    });
-
-    console.log(`[FORM] ${homeTeam}: ${homeForm.length} results | ${awayTeam}: ${awayForm.length} results | H2H: ${h2h.length}`);
+    console.log(`[ESPN-FORM] parsed - ${homeTeam}: ${homeForm.length} | ${awayTeam}: ${awayForm.length} | H2H: ${h2h.length}`);
     return { h2h, homeForm, awayForm };
   } catch(e) {
-    console.error('[FORM] Error:', e.message);
+    console.error('[FORM] ESPN fallback error:', e.message);
     return { h2h: [], homeForm: [], awayForm: [] };
   }
+}
+
+async function getFormFDOrg(homeTeam, awayTeam, league) {
+  const code = LEAGUE_TO_FDORG[league];
+  if (!code) return { h2h: [], homeForm: [], awayForm: [] };
+
+  const headers = { 'X-Auth-Token': FDORG_KEY };
+
+  // Get all teams in this competition to find IDs
+  const teamsRes = await fetch(`https://api.football-data.org/v4/competitions/${code}/teams`, { headers });
+  if (!teamsRes.ok) throw new Error(`FDORG teams: ${teamsRes.status}`);
+  const teamsData = await teamsRes.json();
+
+  const findTeam = (name) => {
+    const nl = name.toLowerCase();
+    return teamsData.teams?.find(t =>
+      t.name?.toLowerCase().includes(nl.split(' ')[0]) ||
+      t.shortName?.toLowerCase().includes(nl.split(' ')[0]) ||
+      nl.includes(t.shortName?.toLowerCase() || '') ||
+      nl.includes(t.tla?.toLowerCase() || '')
+    );
+  };
+
+  const homeTeamObj = findTeam(homeTeam);
+  const awayTeamObj = findTeam(awayTeam);
+  console.log(`[FDORG] Matched: ${homeTeam} → ${homeTeamObj?.name||'?'} | ${awayTeam} → ${awayTeamObj?.name||'?'}`);
+
+  if (!homeTeamObj || !awayTeamObj) return { h2h: [], homeForm: [], awayForm: [] };
+
+  // Fetch last 8 matches for each team + H2H
+  const [hMatches, aMatches, h2hMatches] = await Promise.all([
+    fetch(`https://api.football-data.org/v4/teams/${homeTeamObj.id}/matches?status=FINISHED&limit=8`, { headers }).then(r=>r.json()),
+    fetch(`https://api.football-data.org/v4/teams/${awayTeamObj.id}/matches?status=FINISHED&limit=8`, { headers }).then(r=>r.json()),
+    fetch(`https://api.football-data.org/v4/teams/${homeTeamObj.id}/matches?status=FINISHED&limit=20`, { headers }).then(r=>r.json()),
+  ]);
+
+  const parseMatches = (data, teamId) => {
+    return (data.matches || []).slice(0,5).map(m => {
+      const isHome = m.homeTeam?.id === teamId;
+      const hG = m.score?.fullTime?.home;
+      const aG = m.score?.fullTime?.away;
+      const gf = isHome ? hG : aG;
+      const ga = isHome ? aG : hG;
+      const result = gf == null ? null : gf > ga ? 'W' : gf < ga ? 'L' : 'D';
+      return {
+        date: m.utcDate?.split('T')[0],
+        homeTeam: m.homeTeam?.shortName || m.homeTeam?.name,
+        awayTeam: m.awayTeam?.shortName || m.awayTeam?.name,
+        homeGoals: hG, awayGoals: aG, isHome, result,
+      };
+    });
+  };
+
+  const h2h = (h2hMatches.matches || [])
+    .filter(m => m.homeTeam?.id === awayTeamObj.id || m.awayTeam?.id === awayTeamObj.id)
+    .slice(0,5).map(m => ({
+      date: m.utcDate?.split('T')[0],
+      homeTeam: m.homeTeam?.shortName || m.homeTeam?.name,
+      awayTeam: m.awayTeam?.shortName || m.awayTeam?.name,
+      homeGoals: m.score?.fullTime?.home,
+      awayGoals: m.score?.fullTime?.away,
+    }));
+
+  return {
+    homeForm: parseMatches(hMatches, homeTeamObj.id),
+    awayForm: parseMatches(aMatches, awayTeamObj.id),
+    h2h,
+  };
 }
 
 // ── ROUTES ─────────────────────────────────────────────────────────────────
@@ -409,7 +484,7 @@ app.get('/api/match/:id', async (req, res) => {
   }
 
   // Fetch form + H2H
-  const { h2h, homeForm, awayForm } = await getFormAndH2H(fixture.homeTeam, fixture.awayTeam, fixture.homeEspnId, fixture.awayEspnId, fixture.leagueSlug);
+  const { h2h, homeForm, awayForm } = await getFormAndH2H(fixture.homeTeam, fixture.awayTeam, fixture.homeEspnId, fixture.awayEspnId, fixture.leagueSlug, fixture.league);
   console.log('[MATCH] Running fresh AI for:', fixture.homeTeam, 'vs', fixture.awayTeam, '| H2H:', h2h.length, 'homeForm:', homeForm.length);
   const ai = await analyseWithAI(fixture.homeTeam, fixture.awayTeam, fixture.league, fixture.odds, h2h, homeForm, awayForm);
 
