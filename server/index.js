@@ -144,25 +144,78 @@ async function analyseWithAI(homeTeam, awayTeam, league, odds, h2h=[], homeForm=
     ? `Home Win: ${odds.home} | Draw: ${odds.draw} | Away Win: ${odds.away}${odds.over25 ? ` | Over 2.5: ${odds.over25} | Under 2.5: ${odds.under25}` : ''}`
     : 'No odds available';
 
-  const fmtH2H = h2h.slice(0,5).map(m=>`${m.homeTeam} ${m.homeGoals}-${m.awayGoals} ${m.awayTeam}`).join(' | ') || 'No data';
-  const fmtForm = (form, name) => form.slice(0,5).map(f=>`${f.result}(${f.homeGoals}-${f.awayGoals})`).join(' ') || 'No data';
+  const fmtH2H = h2h.slice(0,5).map(m=>`${m.homeTeam} ${m.homeGoals??'?'}-${m.awayGoals??'?'} ${m.awayTeam} (${m.date||''})`).join(' | ') || 'No data';
 
-  const prompt = `You are a disciplined football betting analyst. Analyse this match carefully.
+  const fmtForm = (form, name) => {
+    if (!form || !form.length) return 'No data';
+    return form.slice(0,5).map(f => {
+      const loc = f.isHome ? 'H' : 'A';
+      const opp = f.isHome ? f.awayTeam : f.homeTeam;
+      return `${f.result||'?'}(${loc} vs ${opp} ${f.homeGoals??'?'}-${f.awayGoals??'?'})`;
+    }).join(' | ');
+  };
+
+  // Work out goal stats from form
+  const goalStats = (form) => {
+    if (!form || form.length < 2) return null;
+    const scored = form.map(f => f.isHome ? (f.homeGoals||0) : (f.awayGoals||0));
+    const conceded = form.map(f => f.isHome ? (f.awayGoals||0) : (f.homeGoals||0));
+    const avg_scored = (scored.reduce((a,b)=>a+b,0)/scored.length).toFixed(1);
+    const avg_conceded = (conceded.reduce((a,b)=>a+b,0)/conceded.length).toFixed(1);
+    const btts_count = form.filter(f => (f.homeGoals||0)>0 && (f.awayGoals||0)>0).length;
+    const over25_count = form.filter(f => (f.homeGoals||0)+(f.awayGoals||0)>2).length;
+    return { avg_scored, avg_conceded, btts_count, over25_count, total: form.length };
+  };
+
+  const hStats = goalStats(homeForm);
+  const aStats = goalStats(awayForm);
+  const statsStr = (hStats && aStats)
+    ? `${homeTeam} stats (last ${hStats.total}): avg scored ${hStats.avg_scored} avg conceded ${hStats.avg_conceded} BTTS in ${hStats.btts_count}/${hStats.total} over2.5 in ${hStats.over25_count}/${hStats.total} | ${awayTeam} stats (last ${aStats.total}): avg scored ${aStats.avg_scored} avg conceded ${aStats.avg_conceded} BTTS in ${aStats.btts_count}/${aStats.total} over2.5 in ${aStats.over25_count}/${aStats.total}`
+    : 'No stats available';
+
+  const prompt = `You are an expert football betting analyst with deep knowledge of European football. Your job is to find the SAFEST, highest-value bet for this match - not the most exciting one.
+
 MATCH: ${homeTeam} vs ${awayTeam} (${league})
-BOOKMAKER ODDS: ${oddsStr}
-H2H LAST 5: ${fmtH2H}
-${homeTeam} FORM: ${fmtForm(homeForm, homeTeam)}
-${awayTeam} FORM: ${fmtForm(awayForm, awayTeam)}
+DATE: Today
 
-Rules:
-- Pick ONLY ONE of these exact tips: "${homeTeam} Win", "Draw", "${awayTeam} Win", "Over 2.5 Goals", "Under 2.5 Goals"
-- Never combine two outcomes into one tip
-- Be conservative - if unsure, pick the most likely outcome based on odds and form
-- confidence must be between 40 and 75
-- model_prob must be between 40 and 75
+BOOKMAKER ODDS:
+${oddsStr}
 
-Respond with ONLY a valid JSON object. No markdown. No extra text. Start with { end with }.
-{"summary":"2 sentence analysis referencing the form and H2H data","tip":"EXACT tip from the list above","market":"h2h or totals","confidence":62,"model_prob":65,"reasoning":"one sentence on why this specific bet has value","risk":"low or medium or high"}`;
+RECENT FORM:
+${homeTeam} last 5: ${fmtForm(homeForm, homeTeam)}
+${awayTeam} last 5: ${fmtForm(awayForm, awayTeam)}
+
+GOAL STATISTICS:
+${statsStr}
+
+HEAD TO HEAD (last 5):
+${fmtH2H}
+
+AVAILABLE MARKETS TO CHOOSE FROM (pick the single safest bet):
+1. "${homeTeam} Win" - use if home team is strong favourite with good form
+2. "Draw" - use ONLY if both teams are very evenly matched AND odds are genuinely attractive
+3. "${awayTeam} Win" - use if away team has significantly better form/quality
+4. "Over 1.5 Goals" - very safe, use when both teams score regularly
+5. "Over 2.5 Goals" - use when both teams average 1.5+ goals and have high-scoring h2h
+6. "Under 2.5 Goals" - use when both defences are strong or matches tend to be low-scoring
+7. "Both Teams to Score" - use when both teams have scored in 3+ of last 5 AND conceded regularly
+8. "Both Teams NOT to Score" - use when either team has a strong defence or scores rarely
+9. "${homeTeam} or Draw" - double chance, use when home team is likely but not certain to win
+10. "${awayTeam} or Draw" - double chance, use when away team is likely but not certain to win
+
+INSTRUCTIONS:
+- Use your knowledge of these teams and their typical playing styles
+- Consider home advantage seriously - home teams win ~46% of matches
+- BTTS is usually the safest bet when both teams have scored in 4/5 recent games
+- Over 1.5 Goals happens in ~75% of matches - consider it when odds are decent
+- DO NOT pick Draw just because you are uncertain - that is lazy
+- Pick the market where you have the most conviction based on the data
+- confidence: how sure you are (50-80)
+- model_prob: your estimated probability this bet wins (50-80)
+- risk: "low" for goals markets and double chance, "medium" for 1X2, "high" for unlikely outcomes
+
+Respond with ONLY valid JSON. No markdown. No extra text.
+{"summary":"3 sentence analysis using the actual form data and goal stats","tip":"EXACT tip from the numbered list above","market":"h2h or totals or btts or dc","confidence":68,"model_prob":72,"reasoning":"specific data-backed reason: e.g. both teams scored in 4/5 recent games and h2h averages 3.1 goals","risk":"low"}`;
 
   // Try Groq first (free, no credit card)
   if (GROQ_KEY) {
@@ -172,9 +225,12 @@ Respond with ONLY a valid JSON object. No markdown. No extra text. Start with { 
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
         body: JSON.stringify({
-          model: 'llama-3.1-8b-instant',
-          messages: [{ role: 'user', content: prompt }],
-          max_tokens: 512, temperature: 0.3,
+          model: 'llama-3.3-70b-versatile',
+          messages: [
+            { role: 'system', content: 'You are an expert football betting analyst. You have deep knowledge of Premier League, La Liga, Bundesliga, Serie A and other European leagues. You know each team\'s playing style, typical formations, attacking and defensive tendencies. Always respond with valid JSON only.' },
+            { role: 'user', content: prompt }
+          ],
+          max_tokens: 600, temperature: 0.4,
         }),
       });
       const data = await resp.json();
@@ -358,16 +414,53 @@ app.get('/api/match/:id', async (req, res) => {
   const ai = await analyseWithAI(fixture.homeTeam, fixture.awayTeam, fixture.league, fixture.odds, h2h, homeForm, awayForm);
 
   const odds = fixture.odds || {};
-  const impliedProb = odds.home ? Math.round(100 / odds.home) : null;
-  const modelProb   = ai?.model_prob || 50;
-  const edgePct     = impliedProb != null ? modelProb - impliedProb : null;
+  const modelProb = ai?.model_prob || 50;
+
+  // Pick best odds based on the AI's chosen tip
+  const getBestOdds = (tip, odds, homeTeam, awayTeam) => {
+    const t = (tip || '').toLowerCase();
+    const h = homeTeam.toLowerCase();
+    const a = awayTeam.toLowerCase();
+    if (t.includes('over 2.5')) return { odds: odds.over25, label: 'Over 2.5' };
+    if (t.includes('under 2.5')) return { odds: odds.under25, label: 'Under 2.5' };
+    if (t.includes('over 1.5')) return { odds: odds.over25 ? parseFloat((odds.over25 * 0.62).toFixed(2)) : null, label: 'Over 1.5' };
+    if (t.includes('both teams to score') && !t.includes('not')) {
+      return { odds: odds.over25 ? parseFloat((odds.over25 * 0.88).toFixed(2)) : null, label: 'BTTS Yes' };
+    }
+    if (t.includes('both teams not')) {
+      return { odds: odds.under25 ? parseFloat((odds.under25 * 0.88).toFixed(2)) : null, label: 'BTTS No' };
+    }
+    if (t.includes(' or draw')) {
+      if (t.includes(h.split(' ')[0]) || t.startsWith(h.split(' ')[0])) {
+        const dc = (odds.home && odds.draw) ? parseFloat((1/(1/odds.home + 1/odds.draw)).toFixed(2)) : null;
+        return { odds: dc, label: homeTeam + ' or Draw' };
+      }
+      if (t.includes(a.split(' ')[0]) || t.includes(a.split(' ').pop())) {
+        const dc = (odds.away && odds.draw) ? parseFloat((1/(1/odds.away + 1/odds.draw)).toFixed(2)) : null;
+        return { odds: dc, label: awayTeam + ' or Draw' };
+      }
+    }
+    if (t.includes('draw')) return { odds: odds.draw, label: 'Draw' };
+    // Check home team name words
+    const homeWords = h.split(' ');
+    if (homeWords.some(w => w.length > 2 && t.includes(w))) return { odds: odds.home, label: homeTeam + ' Win' };
+    // Check away team name words
+    const awayWords = a.split(' ');
+    if (awayWords.some(w => w.length > 2 && t.includes(w))) return { odds: odds.away, label: awayTeam + ' Win' };
+    return { odds: odds.home, label: homeTeam + ' Win' };
+  };
+
+  const { odds: bestOdds, label: betLabel } = getBestOdds(ai?.tip, odds, fixture.homeTeam, fixture.awayTeam);
+  const impliedProb = bestOdds ? Math.round(100 / bestOdds) : null;
+  const edgePct = impliedProb != null ? modelProb - impliedProb : null;
 
   if (ai?.summary) {
     db.cacheAnalysis({
       fixture_id: id, home_team: fixture.homeTeam, away_team: fixture.awayTeam,
       league: fixture.league, fixture_date: (fixture.date||'').split('T')[0],
       analysis: ai.summary, tip: ai.tip || '', market: ai.market || 'h2h',
-      best_odds: odds.home || null, edge_pct: edgePct, model_prob: modelProb,
+      best_odds: bestOdds || null, edge_pct: edgePct, model_prob: modelProb,
+      confidence: ai.confidence, reasoning: ai.reasoning, risk: ai.risk,
     });
   }
 
@@ -384,10 +477,11 @@ app.get('/api/match/:id', async (req, res) => {
     model_prob: modelProb,
     reasoning:  ai?.reasoning  || null,
     risk:       ai?.risk       || null,
-    best_odds:  odds.home      || null,
+    best_odds:  bestOdds       || null,
+    bet_label:  betLabel       || null,
     implied_prob: impliedProb,
     edge_pct:   edgePct,
-    has_value:  edgePct != null && edgePct >= 3,
+    has_value:  edgePct != null && edgePct >= 2,
     h2h, home_form: homeForm, away_form: awayForm,
   });
 });
