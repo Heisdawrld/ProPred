@@ -68,10 +68,13 @@ async function fetchESPN(date) {
         fixtures.push({
           id:         String(ev.id),
           league:     name,
+          leagueSlug: slug,
           leagueLogo: `https://a.espncdn.com/i/leaguelogos/soccer/500/${slug}.png`,
           date:       comp.date,
           homeTeam:   home.team.displayName,
           awayTeam:   away.team.displayName,
+          homeEspnId: home.team.id,
+          awayEspnId: away.team.id,
           homeLogo:   home.team.logo,
           awayLogo:   away.team.logo,
           homeGoals:  home.score != null ? parseInt(home.score) : null,
@@ -233,55 +236,69 @@ Respond with ONLY a valid JSON object. No markdown. No extra text. Start with { 
 }
 
 
-// ── API-FOOTBALL FORM + H2H ────────────────────────────────────────────────
-async function getFormAndH2H(homeTeam, awayTeam) {
-  if (!FOOTBALL_KEY) return { h2h: [], homeForm: [], awayForm: [] };
+// ── ESPN FORM + H2H ──────────────────────────────────────────────────────────
+// Uses ESPN team schedule endpoint to get last 5 results for each team
+async function getFormAndH2H(homeTeam, awayTeam, homeEspnId, awayEspnId, leagueSlug) {
+  if (!homeEspnId || !awayEspnId || !leagueSlug) return { h2h: [], homeForm: [], awayForm: [] };
   try {
-    // Search team IDs
     const [hRes, aRes] = await Promise.all([
-      fetch(`https://v3.football.api-sports.io/teams?name=${encodeURIComponent(homeTeam)}`, { headers: { 'x-apisports-key': FOOTBALL_KEY } }),
-      fetch(`https://v3.football.api-sports.io/teams?name=${encodeURIComponent(awayTeam)}`, { headers: { 'x-apisports-key': FOOTBALL_KEY } }),
+      fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${leagueSlug}/teams/${homeEspnId}/schedule`),
+      fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${leagueSlug}/teams/${awayEspnId}/schedule`),
     ]);
     const hData = await hRes.json();
     const aData = await aRes.json();
-    const homeId = hData.response?.[0]?.team?.id;
-    const awayId = aData.response?.[0]?.team?.id;
-    console.log('[AF] homeId:', homeId, 'awayId:', awayId);
-    if (!homeId || !awayId) return { h2h: [], homeForm: [], awayForm: [] };
 
-    const [h2hRes, hFormRes, aFormRes] = await Promise.all([
-      fetch(`https://v3.football.api-sports.io/fixtures/headtohead?h2h=${homeId}-${awayId}&last=5`, { headers: { 'x-apisports-key': FOOTBALL_KEY } }),
-      fetch(`https://v3.football.api-sports.io/fixtures?team=${homeId}&last=5&status=FT`, { headers: { 'x-apisports-key': FOOTBALL_KEY } }),
-      fetch(`https://v3.football.api-sports.io/fixtures?team=${awayId}&last=5&status=FT`, { headers: { 'x-apisports-key': FOOTBALL_KEY } }),
-    ]);
-    const h2hData   = await h2hRes.json();
-    const hFormData = await hFormRes.json();
-    const aFormData = await aFormRes.json();
+    const parseForm = (data, teamId) => {
+      const events = (data.events || []).filter(ev => {
+        const comp = ev.competitions?.[0];
+        const status = comp?.status?.type?.completed;
+        return status === true;
+      });
+      return events.slice(-6).reverse().slice(0,5).map(ev => {
+        const comp = ev.competitions[0];
+        const home = comp.competitors.find(c => c.homeAway === 'home');
+        const away = comp.competitors.find(c => c.homeAway === 'away');
+        const isHome = home?.team?.id === String(teamId);
+        const hG = home?.score != null ? parseInt(home.score) : null;
+        const aG = away?.score != null ? parseInt(away.score) : null;
+        const gf = isHome ? hG : aG;
+        const ga = isHome ? aG : hG;
+        const result = gf == null ? null : gf > ga ? 'W' : gf < ga ? 'L' : 'D';
+        return {
+          date: comp.date?.split('T')[0],
+          homeTeam: home?.team?.displayName,
+          awayTeam: away?.team?.displayName,
+          homeGoals: hG, awayGoals: aG,
+          isHome, result,
+        };
+      });
+    };
 
-    const fmtFixture = (m, teamId) => {
-      const isHome = m.teams?.home?.id === teamId;
-      const gf = isHome ? m.goals?.home : m.goals?.away;
-      const ga = isHome ? m.goals?.away : m.goals?.home;
-      const result = gf == null ? null : gf > ga ? 'W' : gf < ga ? 'L' : 'D';
+    const homeForm = parseForm(hData, homeEspnId);
+    const awayForm = parseForm(aData, awayEspnId);
+
+    // H2H: find matches where both teams played each other
+    const allHomeEvents = (hData.events || []).filter(ev => ev.competitions?.[0]?.status?.type?.completed);
+    const h2h = allHomeEvents.filter(ev => {
+      const comp = ev.competitions[0];
+      return comp.competitors.some(c => c.team?.id === String(awayEspnId));
+    }).slice(-5).map(ev => {
+      const comp = ev.competitions[0];
+      const home = comp.competitors.find(c => c.homeAway === 'home');
+      const away = comp.competitors.find(c => c.homeAway === 'away');
       return {
-        date: m.fixture?.date?.split('T')[0],
-        homeTeam: m.teams?.home?.name, awayTeam: m.teams?.away?.name,
-        homeGoals: m.goals?.home, awayGoals: m.goals?.away,
-        isHome, result,
+        date: comp.date?.split('T')[0],
+        homeTeam: home?.team?.displayName,
+        awayTeam: away?.team?.displayName,
+        homeGoals: home?.score != null ? parseInt(home.score) : null,
+        awayGoals: away?.score != null ? parseInt(away.score) : null,
       };
-    };
+    });
 
-    return {
-      h2h: (h2hData.response || []).slice(0,5).map(m => ({
-        date: m.fixture?.date?.split('T')[0],
-        homeTeam: m.teams?.home?.name, awayTeam: m.teams?.away?.name,
-        homeGoals: m.goals?.home, awayGoals: m.goals?.away,
-      })),
-      homeForm: (hFormData.response || []).map(m => fmtFixture(m, homeId)),
-      awayForm: (aFormData.response || []).map(m => fmtFixture(m, awayId)),
-    };
+    console.log(`[FORM] ${homeTeam}: ${homeForm.length} results | ${awayTeam}: ${awayForm.length} results | H2H: ${h2h.length}`);
+    return { h2h, homeForm, awayForm };
   } catch(e) {
-    console.error('[AF] Error:', e.message);
+    console.error('[FORM] Error:', e.message);
     return { h2h: [], homeForm: [], awayForm: [] };
   }
 }
@@ -336,7 +353,7 @@ app.get('/api/match/:id', async (req, res) => {
   }
 
   // Fetch form + H2H
-  const { h2h, homeForm, awayForm } = await getFormAndH2H(fixture.homeTeam, fixture.awayTeam);
+  const { h2h, homeForm, awayForm } = await getFormAndH2H(fixture.homeTeam, fixture.awayTeam, fixture.homeEspnId, fixture.awayEspnId, fixture.leagueSlug);
   console.log('[MATCH] Running fresh AI for:', fixture.homeTeam, 'vs', fixture.awayTeam, '| H2H:', h2h.length, 'homeForm:', homeForm.length);
   const ai = await analyseWithAI(fixture.homeTeam, fixture.awayTeam, fixture.league, fixture.odds, h2h, homeForm, awayForm);
 
