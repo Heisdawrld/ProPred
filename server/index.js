@@ -367,10 +367,10 @@ headers: { ‘Content-Type’: ‘application/json’, ‘Authorization’: `Bea
 body: JSON.stringify({
 model: ‘llama-3.3-70b-versatile’,
 messages: [
-{ role: ‘system’, content: ‘You are an expert football betting analyst. You have deep knowledge of Premier League, La Liga, Bundesliga, Serie A and other European leagues. You know each team's playing style, typical formations, attacking and defensive tendencies. Always respond with valid JSON only.’ },
+{ role: ‘system’, content: ‘You are an expert football betting analyst with deep knowledge of world football. Always respond with valid JSON only. No markdown, no code blocks, just raw JSON.’ },
 { role: ‘user’, content: prompt }
 ],
-max_tokens: 600, temperature: 0.4,
+max_tokens: 800, temperature: 0.3,
 }),
 });
 const data = await resp.json();
@@ -394,7 +394,42 @@ console.error(’[AI] JSON parse failed:’, parseErr.message, ‘| text:’, te
 console.error(’[AI] No JSON found in response:’, text.slice(0,200));
 }
 }
-} catch(e) { console.error(’[AI] Groq exception:’, e.message); }
+} catch(e) { console.error(’[AI] Groq 70B exception:’, e.message); }
+
+```
+// Fallback to 8B if 70B fails or rate-limited
+console.log('[AI] Trying Groq 8B fallback...');
+try {
+  const resp2 = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
+    body: JSON.stringify({
+      model: 'llama3-8b-8192',
+      messages: [
+        { role: 'system', content: 'You are a football betting analyst. Respond with valid JSON only. No markdown.' },
+        { role: 'user', content: prompt }
+      ],
+      max_tokens: 600, temperature: 0.3,
+    }),
+  });
+  const data2 = await resp2.json();
+  console.log('[AI] Groq 8B status:', resp2.status);
+  if (resp2.status === 200) {
+    const rawText2 = (data2.choices?.[0]?.message?.content || '').trim();
+    const text2 = rawText2.replace(/^```(?:json)?\n?/,'').replace(/\n?```$/,'').trim();
+    console.log('[AI] Groq 8B response:', text2.slice(0,200));
+    const jsonMatch2 = text2.match(/\{[\s\S]*\}/);
+    if (jsonMatch2) {
+      try {
+        const parsed2 = JSON.parse(jsonMatch2[0]);
+        console.log('[AI] Groq 8B success:', parsed2.tip);
+        return parsed2;
+      } catch(e2) { console.error('[AI] 8B JSON parse failed:', e2.message); }
+    }
+  }
+} catch(e) { console.error('[AI] Groq 8B exception:', e.message); }
+```
+
 }
 
 // Try Gemini
@@ -828,8 +863,6 @@ db.resetBankroll(amount);
 res.json({ ok: true, amount });
 });
 
-app.get(’*’, (req, res) => res.sendFile(path.join(__dirname, ‘../public/index.html’)));
-
 // ── DEBUG: test AI directly ────────────────────────────────────────────────
 app.get(’/api/test-ai’, async (req, res) => {
 try {
@@ -849,6 +882,8 @@ res.json({ ok: true, result, groqKey: GROQ_KEY ? ‘set (’+GROQ_KEY.slice(0,8)
 res.json({ ok: false, error: e.message, groqKey: GROQ_KEY ? ‘set’ : ‘MISSING’ });
 }
 });
+
+app.get(’*’, (req, res) => res.sendFile(path.join(__dirname, ‘../public/index.html’)));
 
 app.listen(PORT, async () => {
 console.log(`PROPRED v2 on :${PORT} | AI: ${AI_KEY ? '✅ key length='+AI_KEY.length : '❌ NO KEY'}`);
