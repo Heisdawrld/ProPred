@@ -54,6 +54,12 @@ db.exec(`
     odds         REAL,
     edge_pct     INTEGER,
     model_prob   INTEGER,
+    confidence   INTEGER,
+    reasoning    TEXT,
+    risk         TEXT,
+    h2h          TEXT DEFAULT '[]',
+    home_form    TEXT DEFAULT '[]',
+    away_form    TEXT DEFAULT '[]',
     created_at   TEXT DEFAULT (datetime('now'))
   );
 
@@ -191,19 +197,19 @@ function getStats() {
 function getCachedAnalysis(fixtureId) {
   const row = db.prepare('SELECT * FROM analysis_cache WHERE fixture_id=?').get(String(fixtureId));
   if(!row) return null;
-  if(Date.now()-new Date(row.created_at).getTime() > 2*60*60*1000) return null; // 2hr cache
+  // Cache is valid for the whole day it was created — never re-run AI for same fixture same day
+  const createdDay = (row.created_at||'').replace('T',' ').split(' ')[0];
+  const todayStr = new Date().toISOString().split('T')[0];
+  if(createdDay !== todayStr) return null;
   return row;
 }
 
 function cacheAnalysis(data) {
   try {
-    // Add columns if they don't exist yet
-    try { db.prepare('ALTER TABLE analysis_cache ADD COLUMN confidence INTEGER').run(); } catch(e) {}
-    try { db.prepare('ALTER TABLE analysis_cache ADD COLUMN reasoning TEXT').run(); } catch(e) {}
-    try { db.prepare('ALTER TABLE analysis_cache ADD COLUMN risk TEXT').run(); } catch(e) {}
-    try { db.prepare('ALTER TABLE analysis_cache ADD COLUMN h2h TEXT').run(); } catch(e) {}
-    try { db.prepare('ALTER TABLE analysis_cache ADD COLUMN home_form TEXT').run(); } catch(e) {}
-    try { db.prepare('ALTER TABLE analysis_cache ADD COLUMN away_form TEXT').run(); } catch(e) {}
+    // Ensure new columns exist (for existing DBs that predate schema update)
+    ['confidence INTEGER','reasoning TEXT','risk TEXT','h2h TEXT','home_form TEXT','away_form TEXT'].forEach(col => {
+      try { db.prepare('ALTER TABLE analysis_cache ADD COLUMN '+col).run(); } catch(e) {}
+    });
     db.prepare(`INSERT OR REPLACE INTO analysis_cache
       (fixture_id,home_team,away_team,league,fixture_date,analysis,tip,market,odds,edge_pct,model_prob,confidence,reasoning,risk,h2h,home_form,away_form,created_at)
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
