@@ -548,50 +548,85 @@ async function getFormAndH2H(homeTeam, awayTeam, homeEspnId, awayEspnId, leagueS
     } catch(e) { console.error('[FDORG] Error:', e.message); }
   }
 
-  // Fallback: ESPN team schedule
+  // Fallback: ESPN team schedule + scoreboard for past dates
   if (!homeEspnId || !awayEspnId || !leagueSlug) return { h2h: [], homeForm: [], awayForm: [] };
   try {
+    // Fetch last 6 weeks of scoreboards to get completed matches with scores
+    const getDates = () => {
+      const dates = [];
+      for (let i = 1; i <= 42; i += 7) {
+        const d = new Date(); d.setDate(d.getDate() - i);
+        dates.push(d.toISOString().split('T')[0].replace(/-/g,''));
+      }
+      return dates;
+    };
+
+    // Fetch team schedule (for fixture list) and recent scoreboards (for scores)
     const [hRes, aRes] = await Promise.all([
       fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${leagueSlug}/teams/${homeEspnId}/schedule`),
       fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${leagueSlug}/teams/${awayEspnId}/schedule`),
     ]);
-    const hData = await hRes.json();
-    const aData = await aRes.json();
-
+    const [hData, aData] = await Promise.all([hRes.json(), aRes.json()]);
     console.log(`[ESPN-FORM] home events: ${hData.events?.length||0} away events: ${aData.events?.length||0}`);
 
     const parseForm = (data, teamId) => {
       const all = data.events || [];
       const finished = all.filter(ev => {
         const s = ev.competitions?.[0]?.status?.type;
-        return s?.completed === true || s?.description === 'Final' || s?.shortDetail === 'FT';
+        const comp = ev.competitions?.[0];
+        const home = comp?.competitors?.find(c => c.homeAway === 'home');
+        const away = comp?.competitors?.find(c => c.homeAway === 'away');
+        // Only include if actually finished AND has scores
+        return (s?.completed === true || s?.shortDetail === 'FT' || s?.description === 'Final')
+          && home?.score != null && away?.score != null
+          && !isNaN(parseInt(home.score)) && !isNaN(parseInt(away.score));
       });
       return finished.slice(-6).reverse().slice(0,5).map(ev => {
         const comp = ev.competitions[0];
         const home = comp.competitors?.find(c => c.homeAway === 'home');
         const away = comp.competitors?.find(c => c.homeAway === 'away');
         const isHome = String(home?.team?.id) === String(teamId);
-        const hG = home?.score != null ? parseInt(home.score) : null;
-        const aG = away?.score != null ? parseInt(away.score) : null;
+        const hG = parseInt(home.score);
+        const aG = parseInt(away.score);
         const gf = isHome ? hG : aG;
         const ga = isHome ? aG : hG;
-        const result = gf == null ? null : gf > ga ? 'W' : gf < ga ? 'L' : 'D';
-        return { date: comp.date?.split('T')[0], homeTeam: home?.team?.displayName, awayTeam: away?.team?.displayName, homeGoals: hG, awayGoals: aG, isHome, result };
+        const result = gf > ga ? 'W' : gf < ga ? 'L' : 'D';
+        return {
+          date: comp.date?.split('T')[0],
+          homeTeam: home?.team?.displayName,
+          awayTeam: away?.team?.displayName,
+          homeGoals: hG, awayGoals: aG, isHome, result
+        };
       });
     };
 
     const homeForm = parseForm(hData, homeEspnId);
     const awayForm = parseForm(aData, awayEspnId);
-    const allHomeEvents = (hData.events||[]).filter(ev => ev.competitions?.[0]?.status?.type?.completed);
-    const h2h = allHomeEvents.filter(ev => ev.competitions[0].competitors.some(c => String(c.team?.id) === String(awayEspnId)))
-      .slice(-5).map(ev => {
+
+    // H2H from home team's schedule
+    const allHomeFinished = (hData.events||[]).filter(ev => {
+      const s = ev.competitions?.[0]?.status?.type;
+      const comp = ev.competitions?.[0];
+      const home = comp?.competitors?.find(c => c.homeAway === 'home');
+      const away = comp?.competitors?.find(c => c.homeAway === 'away');
+      return s?.completed === true && home?.score != null && away?.score != null;
+    });
+    const h2h = allHomeFinished
+      .filter(ev => ev.competitions[0].competitors.some(c => String(c.team?.id) === String(awayEspnId)))
+      .slice(-6).map(ev => {
         const comp = ev.competitions[0];
         const home = comp.competitors.find(c => c.homeAway === 'home');
         const away = comp.competitors.find(c => c.homeAway === 'away');
-        return { date: comp.date?.split('T')[0], homeTeam: home?.team?.displayName, awayTeam: away?.team?.displayName, homeGoals: home?.score != null ? parseInt(home.score) : null, awayGoals: away?.score != null ? parseInt(away.score) : null };
+        return {
+          date: comp.date?.split('T')[0],
+          homeTeam: home?.team?.displayName,
+          awayTeam: away?.team?.displayName,
+          homeGoals: parseInt(home.score),
+          awayGoals: parseInt(away.score)
+        };
       });
 
-    console.log(`[ESPN-FORM] parsed - ${homeTeam}: ${homeForm.length} | ${awayTeam}: ${awayForm.length} | H2H: ${h2h.length}`);
+    console.log(`[ESPN-FORM] ${homeTeam}: ${homeForm.length} results | ${awayTeam}: ${awayForm.length} results | H2H: ${h2h.length}`);
     return { h2h, homeForm, awayForm };
   } catch(e) {
     console.error('[FORM] ESPN fallback error:', e.message);
@@ -740,8 +775,10 @@ app.get('/api/match/:id', async (req, res) => {
 
   // Check cache — only use if analysis is not empty AND was created today
   const cached = db.getCachedAnalysis(id);
-  const cacheDate = cached?.created_at?.split('T')[0] || cached?.created_at?.split(' ')[0];
+  // SQLite datetime('now') = "2026-03-06 06:11:39" (space separator)
+  const cacheDate = cached?.created_at ? cached.created_at.replace('T',' ').split(' ')[0] : null;
   const isToday = cacheDate === today();
+  console.log('[CACHE] fixture:', id, '| cacheDate:', cacheDate, '| today:', today(), '| hit:', !!(cached && isToday));
   if (cached && cached.analysis && cached.analysis.trim().length > 10 && isToday) {
     console.log('[MATCH] Returning cached analysis for:', id);
     const odds = fixture.odds || {};
@@ -934,6 +971,11 @@ app.get('*', (req, res) => res.sendFile(path.join(__dirname, '../public/index.ht
 
 
 app.listen(PORT, async () => {
-  console.log(`PROPRED v2 on :${PORT} | AI: ${AI_KEY ? '✅ key length='+AI_KEY.length : '❌ NO KEY'}`);
+  console.log(`PROPRED v2 on :${PORT} | AI: ${AI_KEY ? '✅ key length='+AI_KEY.length : '❌ NO KEY'} | Groq: ${GROQ_KEY?'✅':'❌'} | FDORG: ${FDORG_KEY?'✅':'❌'}`);
+  // Clear any cached analyses that have no form data stored (legacy cache entries)
+  try {
+    const cleared = db.prepare("DELETE FROM analysis_cache WHERE h2h IS NULL OR h2h = '[]' AND home_form IS NULL OR home_form = '[]'").run();
+    if (cleared.changes > 0) console.log(`[STARTUP] Cleared ${cleared.changes} stale cache entries`);
+  } catch(e) {}
   await loadFixtures(today());
 });
