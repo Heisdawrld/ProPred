@@ -457,8 +457,13 @@ async function loadMatch(id){
   const el=$('matchContent');
   el.innerHTML=`<div class="loader"><div class="spinner"></div><div class="lt">Running AI analysis…</div></div>`;
   try{
-    const m=await fetch(`/api/match/${id}`).then(r=>r.json());
+    let m=await fetch(`/api/match/${id}`).then(r=>r.json());
     if(m.error)throw new Error(m.error);
+    // Auto-retry once if no analysis (race condition on first load)
+    if(!m.analysis){
+      await new Promise(r=>setTimeout(r,1800));
+      m=await fetch(`/api/match/${id}`).then(r=>r.json());
+    }
     const isFT=['FT','AET','PEN'].includes(m.status)||(m.status||'').toLowerCase().includes('final');
     const alreadyBet=betDone[id];
     const o=m.odds||{};
@@ -533,7 +538,12 @@ async function loadMatch(id){
       <button class="acca-btn${inAcca?' in':''}" onclick="toggleAcca('${id}','${esc(m.home_team)}','${esc(m.away_team)}','${esc(m.tip)}','${m.market||'h2h'}',${m.best_odds||o.home||2},${m.confidence||65})">
         ${accaBtnTxt}
       </button>
-    </div>`:`<div class="no-ai"><div style="font-size:1.3rem;margin-bottom:.4rem">🤖</div><div style="font-weight:700;margin-bottom:.35rem">AI Analysis Not Available</div><div style="font-size:.73rem;color:var(--dim)">AI provider not configured</div></div>`;
+    </div>`:`<div class="no-ai">
+      <div style="font-size:1.3rem;margin-bottom:.4rem">🤖</div>
+      <div style="font-weight:700;margin-bottom:.35rem">AI Analysis Unavailable</div>
+      <div style="font-size:.73rem;color:var(--dim);margin-bottom:.85rem">Check the form data below and decide for yourself</div>
+      <button onclick="loadMatch(${id})" style="background:var(--card2);border:1px solid var(--border);color:var(--text);padding:.5rem 1.1rem;border-radius:.4rem;font-family:var(--font);font-size:.76rem;font-weight:700;cursor:pointer">🔄 Retry</button>
+    </div>`;
 
     // Form
     const fmtFrm=(form,label)=>`<div class="section"><div class="sec-title">${label} — Last 5</div>
