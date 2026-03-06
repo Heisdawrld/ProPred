@@ -180,11 +180,23 @@ async function enrichWithFDOrgIds(fixtures, date) {
   try {
     const headers = { 'X-Auth-Token': FDORG_KEY };
     // Get all matches for today across subscribed competitions
-    const res = await fetch(`https://api.football-data.org/v4/matches?dateFrom=${date}&dateTo=${date}`, { headers });
-    if (!res.ok) { console.log('[FDORG-IDS] Failed:', res.status); return; }
+    // Use +/-1 day range to handle UTC offset issues
+    const d = new Date(date);
+    const d1 = new Date(d); d1.setDate(d1.getDate() - 1);
+    const d2 = new Date(d); d2.setDate(d2.getDate() + 1);
+    const fmt = x => x.toISOString().split('T')[0];
+    const url = `https://api.football-data.org/v4/matches?dateFrom=${fmt(d1)}&dateTo=${fmt(d2)}`;
+    console.log('[FDORG-IDS] Fetching:', url);
+    const res = await fetch(url, { headers });
+    if (!res.ok) {
+      const txt = await res.text();
+      console.log('[FDORG-IDS] Failed:', res.status, txt.slice(0,200));
+      return;
+    }
     const data = await res.json();
     const fdMatches = data.matches || [];
-    console.log(`[FDORG-IDS] Found ${fdMatches.length} matches for ${date}`);
+    console.log(`[FDORG-IDS] Found ${fdMatches.length} matches (${fmt(d1)} to ${fmt(d2)})`);
+    if (fdMatches.length > 0) console.log('[FDORG-IDS] Sample:', fdMatches.slice(0,3).map(m=>`${m.homeTeam?.shortName} vs ${m.awayTeam?.shortName} (${m.competition?.code})`).join(', '));
 
     let matched = 0;
     for (const fx of fixtures) {
@@ -492,6 +504,7 @@ const LEAGUE_TO_FDORG = {
 };
 
 async function getFormAndH2H(homeTeam, awayTeam, homeEspnId, awayEspnId, leagueSlug, league, fdorgMatchId) {
+  console.log(`[FORM-START] ${homeTeam} vs ${awayTeam} | league="${league}" | fdorgMatchId=${fdorgMatchId||'none'} | FDORG_KEY=${FDORG_KEY?'set':'MISSING'}`);
   // Try football-data.org first if key is set
   if (FDORG_KEY) {
     try {
@@ -693,9 +706,11 @@ app.get('/api/match/:id', async (req, res) => {
     return res.status(404).json({ error: 'Fixture not found — please go to Fixtures page first' });
   }
 
-  // Check cache — only use if analysis is not empty
+  // Check cache — only use if analysis is not empty AND was created today
   const cached = db.getCachedAnalysis(id);
-  if (cached && cached.analysis && cached.analysis.trim().length > 10) {
+  const cacheDate = cached?.created_at?.split('T')[0] || cached?.created_at?.split(' ')[0];
+  const isToday = cacheDate === today();
+  if (cached && cached.analysis && cached.analysis.trim().length > 10 && isToday) {
     console.log('[MATCH] Returning cached analysis for:', id);
     const odds = fixture.odds || {};
     const impliedProb = odds.home ? Math.round(100 / odds.home) : null;
@@ -717,7 +732,7 @@ app.get('/api/match/:id', async (req, res) => {
 
   // Fetch form + H2H
   const { h2h, homeForm, awayForm } = await getFormAndH2H(fixture.homeTeam, fixture.awayTeam, fixture.homeEspnId, fixture.awayEspnId, fixture.leagueSlug, fixture.league, fixture.fdorgMatchId);
-  console.log('[MATCH] Running fresh AI for:', fixture.homeTeam, 'vs', fixture.awayTeam, '| H2H:', h2h.length, 'homeForm:', homeForm.length);
+  console.log('[MATCH] Running fresh AI for:', fixture.homeTeam, 'vs', fixture.awayTeam, '| H2H:', h2h.length, 'homeForm:', homeForm.length, 'awayForm:', awayForm.length);
   const ai = await analyseWithAI(fixture.homeTeam, fixture.awayTeam, fixture.league, fixture.odds, h2h, homeForm, awayForm);
 
   const odds = fixture.odds || {};
