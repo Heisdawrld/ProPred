@@ -389,17 +389,34 @@ RESPOND WITH ONLY THIS JSON:
       if (resp.status !== 200) { console.error('[AI] Groq error:', data); }
       else {
         const rawText = (data.choices?.[0]?.message?.content || '').trim();
-        // Strip markdown code blocks if model wraps response
         const text = rawText.replace(/^```(?:json)?\n?/,'').replace(/\n?```$/,'').trim();
         console.log('[AI] Groq raw response:', text.slice(0,200));
         const jsonMatch = text.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           try {
-            const parsed = JSON.parse(jsonMatch[0]);
+            // Sanitize control characters inside string values before parsing
+            const clean = jsonMatch[0]
+              .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '') // strip bad control chars
+              .replace(/\n/g, ' ').replace(/\r/g, '');            // flatten newlines in values
+            const parsed = JSON.parse(clean);
             console.log('[AI] Groq success:', parsed.tip);
             return parsed;
           } catch(parseErr) {
-            console.error('[AI] JSON parse failed:', parseErr.message, '| text:', text.slice(0,200));
+            // Last resort: extract fields manually
+            try {
+              const tip = text.match(/"tip"\s*:\s*"([^"]+)"/)?.[1];
+              const market = text.match(/"market"\s*:\s*"([^"]+)"/)?.[1];
+              const summary = text.match(/"summary"\s*:\s*"([^"\n]{10,300})"/)?.[1];
+              const reasoning = text.match(/"reasoning"\s*:\s*"([^"\n]{5,200})"/)?.[1];
+              const confidence = parseInt(text.match(/"confidence"\s*:\s*(\d+)/)?.[1] || '65');
+              const model_prob = parseInt(text.match(/"model_prob"\s*:\s*(\d+)/)?.[1] || '65');
+              const risk = text.match(/"risk"\s*:\s*"([^"]+)"/)?.[1] || 'medium';
+              if (tip) {
+                console.log('[AI] Groq success (manual parse):', tip);
+                return { tip, market, summary, reasoning, confidence, model_prob, risk };
+              }
+            } catch(e2) {}
+            console.error('[AI] JSON parse failed:', parseErr.message);
           }
         } else {
           console.error('[AI] No JSON found in response:', text.slice(0,200));
@@ -414,7 +431,7 @@ RESPOND WITH ONLY THIS JSON:
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
         body: JSON.stringify({
-          model: 'llama3-8b-8192',
+          model: 'llama-3.1-8b-instant',
           messages: [
             { role: 'system', content: 'You are a football betting analyst. Respond with valid JSON only. No markdown.' },
             { role: 'user', content: prompt }
@@ -431,10 +448,25 @@ RESPOND WITH ONLY THIS JSON:
         const jsonMatch2 = text2.match(/\{[\s\S]*\}/);
         if (jsonMatch2) {
           try {
-            const parsed2 = JSON.parse(jsonMatch2[0]);
+            const clean2 = jsonMatch2[0]
+              .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')
+              .replace(/\n/g, ' ').replace(/\r/g, '');
+            const parsed2 = JSON.parse(clean2);
             console.log('[AI] Groq 8B success:', parsed2.tip);
             return parsed2;
-          } catch(e2) { console.error('[AI] 8B JSON parse failed:', e2.message); }
+          } catch(e2) {
+            try {
+              const tip = text2.match(/"tip"\s*:\s*"([^"]+)"/)?.[1];
+              const market = text2.match(/"market"\s*:\s*"([^"]+)"/)?.[1];
+              const summary = text2.match(/"summary"\s*:\s*"([^"\n]{10,300})"/)?.[1];
+              const reasoning = text2.match(/"reasoning"\s*:\s*"([^"\n]{5,200})"/)?.[1];
+              const confidence = parseInt(text2.match(/"confidence"\s*:\s*(\d+)/)?.[1] || '65');
+              const model_prob = parseInt(text2.match(/"model_prob"\s*:\s*(\d+)/)?.[1] || '65');
+              const risk = text2.match(/"risk"\s*:\s*"([^"]+)"/)?.[1] || 'medium';
+              if (tip) { console.log('[AI] Groq 8B success (manual):', tip); return { tip, market, summary, reasoning, confidence, model_prob, risk }; }
+            } catch(e3) {}
+            console.error('[AI] 8B JSON parse failed:', e2.message);
+          }
         }
       }
     } catch(e) { console.error('[AI] Groq 8B exception:', e.message); }
