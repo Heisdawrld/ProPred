@@ -207,12 +207,12 @@ function getCachedAnalysis(fixtureId) {
 function cacheAnalysis(data) {
   try {
     // Ensure new columns exist (for existing DBs that predate schema update)
-    ['confidence INTEGER','reasoning TEXT','risk TEXT','h2h TEXT','home_form TEXT','away_form TEXT'].forEach(col => {
+    ['confidence INTEGER','reasoning TEXT','risk TEXT','h2h TEXT','home_form TEXT','away_form TEXT',"probs TEXT DEFAULT '{}'"].forEach(col => {
       try { db.prepare('ALTER TABLE analysis_cache ADD COLUMN '+col).run(); } catch(e) {}
     });
     db.prepare(`INSERT OR REPLACE INTO analysis_cache
-      (fixture_id,home_team,away_team,league,fixture_date,analysis,tip,market,odds,edge_pct,model_prob,confidence,reasoning,risk,h2h,home_form,away_form,created_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+      (fixture_id,home_team,away_team,league,fixture_date,analysis,tip,market,odds,edge_pct,model_prob,confidence,reasoning,risk,h2h,home_form,away_form,probs,created_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
     `).run(
       String(data.fixture_id||''),
       data.home_team||'',
@@ -230,7 +230,8 @@ function cacheAnalysis(data) {
       data.risk||null,
       data.h2h||'[]',
       data.home_form||'[]',
-      data.away_form||'[]'
+      data.away_form||'[]',
+      data.probs||'{}'
     );
   } catch(e) { console.error('[CACHE]', e.message); }
 }
