@@ -201,9 +201,12 @@ function cacheAnalysis(data) {
     try { db.prepare('ALTER TABLE analysis_cache ADD COLUMN confidence INTEGER').run(); } catch(e) {}
     try { db.prepare('ALTER TABLE analysis_cache ADD COLUMN reasoning TEXT').run(); } catch(e) {}
     try { db.prepare('ALTER TABLE analysis_cache ADD COLUMN risk TEXT').run(); } catch(e) {}
+    try { db.prepare('ALTER TABLE analysis_cache ADD COLUMN h2h TEXT').run(); } catch(e) {}
+    try { db.prepare('ALTER TABLE analysis_cache ADD COLUMN home_form TEXT').run(); } catch(e) {}
+    try { db.prepare('ALTER TABLE analysis_cache ADD COLUMN away_form TEXT').run(); } catch(e) {}
     db.prepare(`INSERT OR REPLACE INTO analysis_cache
-      (fixture_id,home_team,away_team,league,fixture_date,analysis,tip,market,odds,edge_pct,model_prob,confidence,reasoning,risk,created_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+      (fixture_id,home_team,away_team,league,fixture_date,analysis,tip,market,odds,edge_pct,model_prob,confidence,reasoning,risk,h2h,home_form,away_form,created_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
     `).run(
       String(data.fixture_id||''),
       data.home_team||'',
@@ -218,7 +221,10 @@ function cacheAnalysis(data) {
       data.model_prob||null,
       data.confidence||null,
       data.reasoning||null,
-      data.risk||null
+      data.risk||null,
+      data.h2h||'[]',
+      data.home_form||'[]',
+      data.away_form||'[]'
     );
   } catch(e) { console.error('[CACHE]', e.message); }
 }
