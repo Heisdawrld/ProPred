@@ -762,8 +762,14 @@ app.get('/api/match/:id', async (req, res) => {
     });
   }
 
-  // Fetch form + H2H
-  const { h2h, homeForm, awayForm } = await getFormAndH2H(fixture.homeTeam, fixture.awayTeam, fixture.homeEspnId, fixture.awayEspnId, fixture.leagueSlug, fixture.league, fixture.fdorgMatchId);
+  // Fetch form + H2H (with timeout so slow FDORG doesn't block AI)
+  let h2h = [], homeForm = [], awayForm = [];
+  try {
+    const formPromise = getFormAndH2H(fixture.homeTeam, fixture.awayTeam, fixture.homeEspnId, fixture.awayEspnId, fixture.leagueSlug, fixture.league, fixture.fdorgMatchId);
+    const timeoutPromise = new Promise(resolve => setTimeout(() => resolve({ h2h:[], homeForm:[], awayForm:[] }), 5000));
+    const formResult = await Promise.race([formPromise, timeoutPromise]);
+    h2h = formResult.h2h; homeForm = formResult.homeForm; awayForm = formResult.awayForm;
+  } catch(e) { console.error('[MATCH] Form fetch error:', e.message); }
   console.log('[MATCH] Running fresh AI for:', fixture.homeTeam, 'vs', fixture.awayTeam, '| H2H:', h2h.length, 'homeForm:', homeForm.length, 'awayForm:', awayForm.length);
   const ai = await analyseWithAI(fixture.homeTeam, fixture.awayTeam, fixture.league, fixture.odds, h2h, homeForm, awayForm);
 
