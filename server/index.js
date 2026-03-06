@@ -758,7 +758,9 @@ app.get('/api/match/:id', async (req, res) => {
       reasoning: cached.reasoning, risk: cached.risk,
       best_odds: odds.home || null, implied_prob: impliedProb,
       edge_pct: edgePct, has_value: edgePct != null && edgePct >= 3,
-      h2h: [], home_form: [], away_form: [],
+      h2h: (() => { try { return JSON.parse(cached.h2h||'[]'); } catch(e) { return []; } })(),
+      home_form: (() => { try { return JSON.parse(cached.home_form||'[]'); } catch(e) { return []; } })(),
+      away_form: (() => { try { return JSON.parse(cached.away_form||'[]'); } catch(e) { return []; } })(),
     });
   }
 
@@ -841,6 +843,7 @@ app.get('/api/match/:id', async (req, res) => {
       analysis: ai.summary, tip: ai.tip || '', market: ai.market || 'h2h',
       best_odds: bestOdds || null, edge_pct: edgePct, model_prob: modelProb,
       confidence: ai.confidence, reasoning: ai.reasoning, risk: ai.risk,
+      h2h: JSON.stringify(h2h), home_form: JSON.stringify(homeForm), away_form: JSON.stringify(awayForm),
     });
   }
 
