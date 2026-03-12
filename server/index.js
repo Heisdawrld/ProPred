@@ -311,20 +311,30 @@ async function analyseWithAI(homeTeam, awayTeam, league, odds, h2h=[], homeForm=
   const h2hG=h2h.filter(m=>m.homeGoals!=null).map(m=>m.homeGoals+m.awayGoals);
   const statsBlk=(hS&&aS)?`\nSTATS: ${homeTeam}: scored ${hS.avgSc}/g conceded ${hS.avgCo}/g total ${hS.avgTot}/g BTTS ${hS.btts}/${hS.n} O2.5 ${hS.o25}/${hS.n} CS ${hS.cs}/${hS.n}\n${awayTeam}: scored ${aS.avgSc}/g conceded ${aS.avgCo}/g total ${aS.avgTot}/g BTTS ${aS.btts}/${aS.n} O2.5 ${aS.o25}/${aS.n} CS ${aS.cs}/${aS.n}\nH2H avg goals: ${h2hG.length?(h2hG.reduce((a,b)=>a+b,0)/h2hG.length).toFixed(1):'N/A'} BTTS: ${h2h.filter(m=>m.homeGoals>0&&m.awayGoals>0).length}/${h2h.length}`:'';
 
-  const prompt=`You are an expert football betting analyst. Deep knowledge of all world football.
+  const hasOdds = oddsLines.length > 0;
+  const hasFormData = homeForm.length > 0 || awayForm.length > 0;
+
+  const prompt=`You are an elite football betting analyst with encyclopedic knowledge of every league worldwide.
 
 MATCH: ${homeTeam} vs ${awayTeam} | ${league}
-ODDS: ${oddsLines.length?oddsLines.join(' | '):'No odds available'}
+ODDS: ${hasOdds ? oddsLines.join(' | ') : 'Not available — base tip purely on probabilities'}
 ${homeTeam} FORM: ${fmtF(homeForm)}
 ${awayTeam} FORM: ${fmtF(awayForm)}
-H2H: ${h2h.length?h2h.slice(0,5).map(m=>`${m.homeTeam} ${m.homeGoals??'?'}-${m.awayGoals??'?'} ${m.awayTeam}`).join(' | '):'Use your knowledge'}
+H2H: ${h2h.length ? h2h.slice(0,5).map(m=>`${m.homeTeam} ${m.homeGoals??'?'}-${m.awayGoals??'?'} ${m.awayTeam}`).join(' | ') : 'No API data — use your knowledge'}
 ${statsBlk}
-${!homeForm.length?`NOTE: No API data for ${league}. Use your encyclopedic knowledge of ${homeTeam} and ${awayTeam} current season form, playing styles, and typical goal patterns.`:''}
+${!hasFormData ? `IMPORTANT: No live form data available. You MUST use your deep internal knowledge of ${homeTeam} and ${awayTeam}'s ${new Date().getFullYear()} season — their current form, injuries, playing style, home/away record, and typical scoring patterns. Do NOT refuse to pick a tip.` : ''}
 
-Provide true probability estimates for each outcome. Find the best value bet (where your prob > implied prob from odds most).
+RULES:
+1. You MUST always pick a best_tip — never leave it blank or say "insufficient data"
+2. If no odds are available, pick the tip based on probability alone (highest confidence outcome)
+3. If form data is missing, use your training knowledge of these teams this season
+4. Prefer goals markets (Over/Under) when match result is too close to call
+5. Confidence should reflect true certainty, not just echo odds
 
-RESPOND WITH ONLY VALID JSON:
-{"summary":"2-3 sentences on both teams form and this matchup","reasoning":"1 sentence why your top bet wins","best_tip":"e.g. Over 2.5 Goals","best_market":"totals","confidence":72,"risk":"medium","probs":{"home_win":45,"draw":27,"away_win":28,"dc_home_draw":72,"dc_away_draw":55,"dnb_home":61,"dnb_away":39,"over15":82,"under15":18,"over25":54,"under25":46,"over35":30,"under35":70,"over45":14,"btts_yes":52,"btts_no":48,"ah_home":57,"ah_away":43}}`;
+Provide true probability estimates. Pick the single best tip with highest edge or highest confidence.
+
+RESPOND WITH ONLY VALID JSON (no markdown, no explanation):
+{"summary":"2-3 sentences on both teams current form and this specific matchup","reasoning":"1 sentence why this tip wins","best_tip":"e.g. Over 2.5 Goals","best_market":"totals","confidence":72,"risk":"medium","probs":{"home_win":45,"draw":27,"away_win":28,"dc_home_draw":72,"dc_away_draw":55,"dnb_home":61,"dnb_away":39,"over15":82,"under15":18,"over25":54,"under25":46,"over35":30,"under35":70,"over45":14,"btts_yes":52,"btts_no":48,"ah_home":57,"ah_away":43}}`;
 
   const parse=text=>{
     const s=text.replace(/^```(?:json)?\n?/,'').replace(/\n?```$/,'').trim();
@@ -462,6 +472,11 @@ app.get('/api/match/:id', async (req, res) => {
   const impliedProb = bestOdds ? Math.round(100/bestOdds) : null;
   const edgePct = impliedProb != null ? modelProb - impliedProb : null;
 
+  // has_value: true if edge exists AND odds available.
+  // no_odds_tip: true when AI gave a tip but no odds are available — still show the pick, just no bet button.
+  const hasValue = edgePct != null && edgePct >= 2;
+  const noOddsTip = !!(ai?.best_tip && !bestOdds);
+
   if (ai?.summary) {
     db.cacheAnalysis({
       fixture_id:id, home_team:fixture.homeTeam, away_team:fixture.awayTeam,
@@ -483,7 +498,7 @@ app.get('/api/match/:id', async (req, res) => {
     confidence:ai?.confidence||null, model_prob:modelProb,
     reasoning:ai?.reasoning||null, risk:ai?.risk||null,
     best_odds:bestOdds||null, bet_label:betLabel||null,
-    implied_prob:impliedProb, edge_pct:edgePct, has_value:edgePct!=null&&edgePct>=2,
+    implied_prob:impliedProb, edge_pct:edgePct, has_value:hasValue, no_odds_tip:noOddsTip,
     probs:ai?.probs||{}, h2h, home_form:homeForm, away_form:awayForm,
   });
 });
