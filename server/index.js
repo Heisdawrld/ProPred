@@ -4,14 +4,15 @@ const express  = require('express');
 const fetch    = require('node-fetch');
 const path     = require('path');
 const db       = require('./db');
+const bsd      = require('./bsd');   // ← BSD predictions module
 
 const app  = express();
 const PORT = process.env.PORT || 10000;
-const AI_KEY       = (process.env.ANTHROPIC_KEY || '').trim();
-const GEMINI_KEY   = (process.env.GEMINI_KEY || '').trim();
-const GROQ_KEY     = (process.env.GROQ_KEY || '').trim();
-const ODDS_KEY     = process.env.ODDS_API_KEY || '';
-const FDORG_KEY    = (process.env.FDORG_KEY || '').trim();
+const AI_KEY       = (process.env.ANTHROPIC_KEY  || '').trim();
+const GEMINI_KEY   = (process.env.GEMINI_KEY     || '').trim();
+const GROQ_KEY     = (process.env.GROQ_KEY       || '').trim();
+const ODDS_KEY     = process.env.ODDS_API_KEY    || '';
+const FDORG_KEY    = (process.env.FDORG_KEY      || '').trim();
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
@@ -228,11 +229,10 @@ async function getFormFDOrg(homeTeam, awayTeam, league, fdorgMatchId) {
   return { homeForm:parseForm(hData,hObj.id), awayForm:parseForm(aData,aObj.id), h2h };
 }
 
-// ── FORM: ESPN SCOREBOARD FALLBACK (works for ALL leagues) ────────────────
+// ── FORM: ESPN SCOREBOARD FALLBACK ────────────────────────────────────────
 async function getFormESPN(homeTeam, awayTeam, homeId, awayId, slug) {
   if (!homeId||!awayId||!slug) return {h2h:[],homeForm:[],awayForm:[]};
   try {
-    // Fetch last 12 weeks of scoreboards in batches
     const dates=[];
     for (let i=3;i<=90;i+=7) { const d=new Date(); d.setDate(d.getDate()-i); dates.push(d.toISOString().split('T')[0].replace(/-/g,'')); }
     const allEvents=[];
@@ -268,7 +268,6 @@ async function getFormESPN(homeTeam, awayTeam, homeId, awayId, slug) {
   } catch(e) { console.error('[ESPN-FORM]',e.message); return {h2h:[],homeForm:[],awayForm:[]}; }
 }
 
-// ── MAIN FORM DISPATCHER ──────────────────────────────────────────────────
 async function getFormAndH2H(homeTeam, awayTeam, homeId, awayId, slug, league, fdorgMatchId) {
   console.log(`[FORM] ${homeTeam} vs ${awayTeam} | ${league}`);
   if (FDORG_KEY) {
@@ -489,6 +488,33 @@ app.get('/api/match/:id', async (req, res) => {
   });
 });
 
+// ── BSD PREDICTIONS ROUTES ────────────────────────────────────────────────
+
+/**
+ * GET /api/bsd-predictions
+ * Returns enriched BSD predictions (cached, refreshes every 15 min).
+ * 200 immediately if cache is warm; triggers background update if stale.
+ */
+app.get('/api/bsd-predictions', async (req, res) => {
+  try {
+    const preds = await bsd.getPredictions();
+    res.json({ ok: true, count: preds.length, predictions: preds });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/**
+ * POST /api/bsd-predictions/refresh
+ * Force-triggers a cache refresh (fire-and-forget).
+ * Useful for Render keep-alive pings and manual refreshes.
+ */
+app.post('/api/bsd-predictions/refresh', (req, res) => {
+  bsd.updateCache(); // non-blocking
+  res.json({ ok: true, message: 'Cache refresh triggered' });
+});
+
+// ── EXISTING ROUTES (unchanged) ───────────────────────────────────────────
 app.post('/api/bet', (req, res) => {
   try { const bet=db.placeBet(req.body); if(!bet)return res.json({ok:false,reason:'Insufficient bankroll'}); res.json({ok:true,bet}); }
   catch(e) { res.status(500).json({ok:false,reason:e.message}); }
@@ -509,7 +535,15 @@ app.post('/api/settle', async (req, res) => {
     res.json({ok:true,settled});
   } catch(e) { res.status(500).json({error:e.message}); }
 });
-app.get('/api/status', (req, res) => { const s=db.getStats(); res.json({status:'ok',version:'3.0',hasAI:!!(GROQ_KEY||AI_KEY||GEMINI_KEY),bankroll:s.bankroll,totalBets:s.totalBets,winRate:s.winRate}); });
+app.get('/api/status', (req, res) => {
+  const s=db.getStats();
+  res.json({
+    status:'ok', version:'3.1',
+    hasAI:!!(GROQ_KEY||AI_KEY||GEMINI_KEY),
+    hasBSD:!!process.env.BSD_API_KEY,
+    bankroll:s.bankroll, totalBets:s.totalBets, winRate:s.winRate,
+  });
+});
 app.post('/api/bankroll/reset', (req, res) => { const a=parseFloat(req.body.amount)||1000; db.resetBankroll(a); res.json({ok:true,amount:a}); });
 app.get('/api/test-ai', async (req, res) => {
   try {
@@ -519,9 +553,15 @@ app.get('/api/test-ai', async (req, res) => {
 });
 app.get('*', (req, res) => res.sendFile(path.join(__dirname,'../public/index.html')));
 
+// ── STARTUP ───────────────────────────────────────────────────────────────
 app.listen(PORT, async () => {
-  console.log(`PROPRED v3 :${PORT} | Groq:${GROQ_KEY?'✅':'❌'} | FDORG:${FDORG_KEY?'✅':'❌'} | Odds:${ODDS_KEY?'✅':'❌'}`);
+  console.log(`PROPRED v3.1 :${PORT} | Groq:${GROQ_KEY?'✅':'❌'} | BSD:${process.env.BSD_API_KEY?'✅':'❌'} | FDORG:${FDORG_KEY?'✅':'❌'} | Odds:${ODDS_KEY?'✅':'❌'}`);
+
+  // DB migrations
   try { db.prepare("ALTER TABLE analysis_cache ADD COLUMN probs TEXT DEFAULT '{}'").run(); } catch(e) {}
   try { db.prepare("DELETE FROM analysis_cache WHERE date(created_at) < date('now')").run(); } catch(e) {}
+
+  // Warm both caches on startup (non-blocking for BSD so fixtures load first)
   await loadFixtures(today());
+  bsd.scheduleRefresh(); // starts BSD fetch + sets 15-min interval
 });
