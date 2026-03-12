@@ -41,6 +41,17 @@ const ODDS_MAP = {
 const LEAGUE_TO_FDORG = {
   'Premier League':'PL','La Liga':'PD','Bundesliga':'BL1','Serie A':'SA','Ligue 1':'FL1',
   'Champions League':'CL','Europa League':'EL','Championship':'ELC','Eredivisie':'DED','Primeira Liga':'PPL',
+  'Bundesliga 2':'BL2','Segunda Division':'PD2','Serie B':'SA2','Ligue 2':'FL2',
+  'Pro League':'BSA','Scottish Prem':'PPL',
+};
+
+// API-Football league IDs (from BSD module — free tier key available)
+const LEAGUE_TO_APIFOOTBALL = {
+  'Premier League':39,'La Liga':140,'Bundesliga':78,'Serie A':135,'Ligue 1':61,
+  'Champions League':2,'Europa League':3,'Championship':40,'Eredivisie':88,'Primeira Liga':94,
+  'Bundesliga 2':79,'Segunda Division':141,'Serie B':136,'Ligue 2':62,'Super Lig':203,
+  'Scottish Prem':179,'Pro League':144,'MLS':253,'Brasileirao':71,'Primera Division':128,
+  'Europa Conference League':848,'Nations League':5,
 };
 
 // ── ESPN FIXTURES ─────────────────────────────────────────────────────────
@@ -229,6 +240,88 @@ async function getFormFDOrg(homeTeam, awayTeam, league, fdorgMatchId) {
   return { homeForm:parseForm(hData,hObj.id), awayForm:parseForm(aData,aObj.id), h2h };
 }
 
+// ── FORM: API-FOOTBALL FALLBACK ──────────────────────────────────────────
+const apiFootballCache = {};
+
+async function getFormAPIFootball(homeTeam, awayTeam, league) {
+  const API_FOOTBALL_KEY = process.env.API_FOOTBALL_KEY || '';
+  if (!API_FOOTBALL_KEY) return null;
+  const leagueId = LEAGUE_TO_APIFOOTBALL[league];
+  if (!leagueId) return null;
+
+  const headers = { 'x-apisports-key': API_FOOTBALL_KEY };
+  const season = new Date().getFullYear(); // current season year
+
+  // Search for team IDs
+  const findTeamId = async (name) => {
+    const cacheKey = name.toLowerCase();
+    if (apiFootballCache[cacheKey]) return apiFootballCache[cacheKey];
+    try {
+      const r = await fetch(`https://v3.football.api-sports.io/teams?name=${encodeURIComponent(name)}&league=${leagueId}&season=${season}`, { headers });
+      const d = await r.json();
+      const team = d.response?.[0]?.team;
+      if (team) { apiFootballCache[cacheKey] = team.id; return team.id; }
+      // fuzzy: try first significant word
+      const word = name.split(' ').filter(w=>w.length>3)[0];
+      if (word && word !== name) {
+        const r2 = await fetch(`https://v3.football.api-sports.io/teams?name=${encodeURIComponent(word)}&league=${leagueId}&season=${season}`, { headers });
+        const d2 = await r2.json();
+        const t2 = d2.response?.[0]?.team;
+        if (t2) { apiFootballCache[cacheKey] = t2.id; return t2.id; }
+      }
+    } catch(e) {}
+    return null;
+  };
+
+  const [homeId, awayId] = await Promise.all([findTeamId(homeTeam), findTeamId(awayTeam)]);
+  console.log(`[API-FOOTBALL] ${homeTeam}→${homeId||'NO'} | ${awayTeam}→${awayId||'NO'}`);
+  if (!homeId || !awayId) return null;
+
+  const getForm = async (teamId, teamName) => {
+    const r = await fetch(`https://v3.football.api-sports.io/fixtures?team=${teamId}&last=8&status=FT`, { headers });
+    const d = await r.json();
+    return (d.response || [])
+      .sort((a,b) => new Date(b.fixture.date) - new Date(a.fixture.date))
+      .slice(0,6)
+      .map(m => {
+        const isHome = m.teams.home.id === teamId;
+        const hG = m.goals.home, aG = m.goals.away;
+        const gf = isHome ? hG : aG, ga = isHome ? aG : hG;
+        return {
+          date: m.fixture.date?.split('T')[0],
+          homeTeam: m.teams.home.name, awayTeam: m.teams.away.name,
+          homeGoals: hG, awayGoals: aG, isHome,
+          result: gf > ga ? 'W' : gf < ga ? 'L' : 'D'
+        };
+      });
+  };
+
+  const getH2H = async () => {
+    const r = await fetch(`https://v3.football.api-sports.io/fixtures?h2h=${homeId}-${awayId}&last=8&status=FT`, { headers });
+    const d = await r.json();
+    return (d.response || [])
+      .sort((a,b) => new Date(b.fixture.date) - new Date(a.fixture.date))
+      .slice(0,6)
+      .map(m => ({
+        date: m.fixture.date?.split('T')[0],
+        homeTeam: m.teams.home.name, awayTeam: m.teams.away.name,
+        homeGoals: m.goals.home, awayGoals: m.goals.away
+      }));
+  };
+
+  try {
+    const [homeForm, awayForm, h2h] = await Promise.all([
+      getForm(homeId, homeTeam), getForm(awayId, awayTeam), getH2H()
+    ]);
+    console.log(`[API-FOOTBALL] home:${homeForm.length} away:${awayForm.length} h2h:${h2h.length}`);
+    if (!homeForm.length && !awayForm.length) return null;
+    return { homeForm, awayForm, h2h };
+  } catch(e) {
+    console.error('[API-FOOTBALL] form error:', e.message);
+    return null;
+  }
+}
+
 // ── FORM: ESPN SCOREBOARD FALLBACK ────────────────────────────────────────
 async function getFormESPN(homeTeam, awayTeam, homeId, awayId, slug) {
   if (!homeId||!awayId||!slug) return {h2h:[],homeForm:[],awayForm:[]};
@@ -270,17 +363,33 @@ async function getFormESPN(homeTeam, awayTeam, homeId, awayId, slug) {
 
 async function getFormAndH2H(homeTeam, awayTeam, homeId, awayId, slug, league, fdorgMatchId) {
   console.log(`[FORM] ${homeTeam} vs ${awayTeam} | ${league}`);
+
+  // Tier 1: FDORG (most reliable for top leagues)
   if (FDORG_KEY) {
     try {
-      const r=await getFormFDOrg(homeTeam,awayTeam,league,fdorgMatchId);
-      if (r&&(r.homeForm.length>0||r.awayForm.length>0)) {
+      const r = await getFormFDOrg(homeTeam, awayTeam, league, fdorgMatchId);
+      if (r && (r.homeForm.length > 0 || r.awayForm.length > 0)) {
         console.log(`[FORM] FDORG ok: home=${r.homeForm.length} away=${r.awayForm.length}`);
         return r;
       }
-    } catch(e) { console.error('[FORM] FDORG err:',e.message); }
+    } catch(e) { console.error('[FORM] FDORG err:', e.message); }
   }
+
+  // Tier 2: API-Football (covers 100+ leagues including Bundesliga 2, Serie B etc)
+  try {
+    const r = await Promise.race([
+      getFormAPIFootball(homeTeam, awayTeam, league),
+      new Promise(res => setTimeout(() => res(null), 8000))
+    ]);
+    if (r && (r.homeForm.length > 0 || r.awayForm.length > 0)) {
+      console.log(`[FORM] API-Football ok: home=${r.homeForm.length} away=${r.awayForm.length}`);
+      return r;
+    }
+  } catch(e) { console.error('[FORM] API-Football err:', e.message); }
+
+  // Tier 3: ESPN scoreboard (free, slug-dependent)
   console.log(`[FORM] ESPN fallback for ${league}`);
-  return getFormESPN(homeTeam,awayTeam,homeId,awayId,slug);
+  return getFormESPN(homeTeam, awayTeam, homeId, awayId, slug);
 }
 
 // ── AI ANALYSIS ───────────────────────────────────────────────────────────
@@ -527,6 +636,9 @@ app.get('/api/match/:id', async (req, res) => {
     });
   }
 
+  const isBlind = homeForm.length === 0 && awayForm.length === 0;
+  const hasNoOdds = !Object.keys(odds).length || !odds.home;
+
   res.json({
     id, home_team:fixture.homeTeam, away_team:fixture.awayTeam, league:fixture.league,
     fixture_date:(fixture.date||'').split('T')[0], home_logo:fixture.homeLogo, away_logo:fixture.awayLogo,
@@ -537,6 +649,7 @@ app.get('/api/match/:id', async (req, res) => {
     reasoning:ai?.reasoning||null, risk:ai?.risk||null,
     best_odds:bestOdds||null, bet_label:betLabel||null,
     implied_prob:impliedProb, edge_pct:edgePct, has_value:hasValue, no_odds_tip:noOddsTip,
+    is_blind:isBlind, has_no_odds:hasNoOdds,
     probs:ai?.probs||{}, h2h, home_form:homeForm, away_form:awayForm,
   });
 });
