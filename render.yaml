@@ -11,6 +11,10 @@ services:
         value: f40efeabae93fc096daa59c7e2ab6fc2
       - key: ANTHROPIC_KEY
         sync: false
+      - key: GROQ_KEY
+        sync: false
+      - key: BSD_API_KEY
+        sync: false
       - key: DATA_DIR
         value: /opt/render/project/data
     disk:
