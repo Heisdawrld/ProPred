@@ -314,27 +314,51 @@ async function analyseWithAI(homeTeam, awayTeam, league, odds, h2h=[], homeForm=
   const hasOdds = oddsLines.length > 0;
   const hasFormData = homeForm.length > 0 || awayForm.length > 0;
 
-  const prompt=`You are an elite football betting analyst with encyclopedic knowledge of every league worldwide.
+  // Individual team goal stats for prompt
+  const teamGoalStats = (hS && aS) ? `
+${homeTeam} avg scored: ${hS.avgSc}/g | avg conceded: ${hS.avgCo}/g | clean sheets: ${hS.cs}/${hS.n}
+${awayTeam} avg scored: ${aS.avgSc}/g | avg conceded: ${aS.avgCo}/g | clean sheets: ${aS.cs}/${aS.n}` : '';
+
+  const prompt=`You are a sharp football betting analyst. You know ball. You think independently.
 
 MATCH: ${homeTeam} vs ${awayTeam} | ${league}
-ODDS: ${hasOdds ? oddsLines.join(' | ') : 'Not available — base tip purely on probabilities'}
-${homeTeam} FORM: ${fmtF(homeForm)}
-${awayTeam} FORM: ${fmtF(awayForm)}
-H2H: ${h2h.length ? h2h.slice(0,5).map(m=>`${m.homeTeam} ${m.homeGoals??'?'}-${m.awayGoals??'?'} ${m.awayTeam}`).join(' | ') : 'No API data — use your knowledge'}
-${statsBlk}
-${!hasFormData ? `IMPORTANT: No live form data available. You MUST use your deep internal knowledge of ${homeTeam} and ${awayTeam}'s ${new Date().getFullYear()} season — their current form, injuries, playing style, home/away record, and typical scoring patterns. Do NOT refuse to pick a tip.` : ''}
+DATE: ${new Date().toISOString().split('T')[0]}
+
+AVAILABLE ODDS:
+${hasOdds ? oddsLines.join('\n') : 'Not available — estimate true probabilities only'}
+
+${homeTeam} LAST 6: ${fmtF(homeForm)}
+${awayTeam} LAST 6: ${fmtF(awayForm)}
+H2H (recent): ${h2h.length ? h2h.slice(0,5).map(m=>`${m.homeTeam} ${m.homeGoals??'?'}-${m.awayGoals??'?'} ${m.awayTeam}`).join(' | ') : 'No data — use your knowledge'}
+${statsBlk}${teamGoalStats}
+${!hasFormData ? `NOTE: No live data. Use your knowledge of ${homeTeam} and ${awayTeam} this season — form, style, injuries, home/away splits.` : ''}
+
+YOUR JOB:
+Analyse this match across ALL markets below. Think like a sharp — not a tipster defaulting to Over 2.5.
+Consider each market on its own merits. Pick whichever single market you are MOST confident in.
+
+MARKETS YOU CAN PICK FROM:
+- Match Result: "${homeTeam} Win" | "Draw" | "${awayTeam} Win"
+- Double Chance: "${homeTeam} or Draw" | "${awayTeam} or Draw"
+- Draw No Bet: "${homeTeam} DNB" | "${awayTeam} DNB"
+- Asian Handicap: "${homeTeam} -0.5" | "${awayTeam} -0.5"
+- Total Goals: "Over 1.5 Goals" | "Under 1.5 Goals" | "Over 2.5 Goals" | "Under 2.5 Goals" | "Over 3.5 Goals" | "Under 3.5 Goals" | "Over 4.5 Goals"
+- BTTS: "Both Teams to Score - Yes" | "Both Teams to Score - No"
+- ${homeTeam} Goals: "${homeTeam} Over 0.5 Goals" | "${homeTeam} Over 1.5 Goals" | "${homeTeam} Under 0.5 Goals" | "${homeTeam} Under 1.5 Goals"
+- ${awayTeam} Goals: "${awayTeam} Over 0.5 Goals" | "${awayTeam} Over 1.5 Goals" | "${awayTeam} Under 0.5 Goals" | "${awayTeam} Under 1.5 Goals"
 
 RULES:
-1. You MUST always pick a best_tip — never leave it blank or say "insufficient data"
-2. If no odds are available, pick the tip based on probability alone (highest confidence outcome)
-3. If form data is missing, use your training knowledge of these teams this season
-4. Prefer goals markets (Over/Under) when match result is too close to call
-5. Confidence should reflect true certainty, not just echo odds
+- Pick the market where your TRUE probability is most different from the implied odds probability
+- If no odds: pick the outcome you'd bet your own money on
+- Over/Under 2.5 is NOT the default — only pick it if the data genuinely points there
+- A team win or DNB is often sharper than a totals market — don't avoid it
+- best_tip must be EXACTLY one of the market strings listed above
+- best_market values: "h2h" | "dc" | "dnb" | "asian" | "totals" | "btts" | "team_goals"
+- confidence = your true estimated probability (0-100) for this specific tip
+- risk: "low" (<2.0 odds equivalent) | "medium" (2.0-3.5) | "high" (>3.5)
 
-Provide true probability estimates. Pick the single best tip with highest edge or highest confidence.
-
-RESPOND WITH ONLY VALID JSON (no markdown, no explanation):
-{"summary":"2-3 sentences on both teams current form and this specific matchup","reasoning":"1 sentence why this tip wins","best_tip":"e.g. Over 2.5 Goals","best_market":"totals","confidence":72,"risk":"medium","probs":{"home_win":45,"draw":27,"away_win":28,"dc_home_draw":72,"dc_away_draw":55,"dnb_home":61,"dnb_away":39,"over15":82,"under15":18,"over25":54,"under25":46,"over35":30,"under35":70,"over45":14,"btts_yes":52,"btts_no":48,"ah_home":57,"ah_away":43}}`;
+RESPOND WITH ONLY VALID JSON (no markdown, no backticks):
+{"summary":"2-3 sentences on both teams form and this matchup — be specific","reasoning":"1 sharp sentence why THIS market and THIS pick wins","best_tip":"exact string from market list above","best_market":"h2h","confidence":68,"risk":"medium","probs":{"home_win":45,"draw":27,"away_win":28,"dc_home_draw":72,"dc_away_draw":55,"dnb_home":61,"dnb_away":39,"over15":82,"under15":18,"over25":54,"under25":46,"over35":30,"under35":70,"over45":14,"btts_yes":52,"btts_no":48,"ah_home":57,"ah_away":43,"home_over05":78,"home_over15":45,"away_over05":65,"away_over15":38}}`;
 
   const parse=text=>{
     const s=text.replace(/^```(?:json)?\n?/,'').replace(/\n?```$/,'').trim();
@@ -360,7 +384,7 @@ RESPOND WITH ONLY VALID JSON (no markdown, no explanation):
 
   const groqCall=async model=>{
     const resp=await fetch('https://api.groq.com/openai/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${GROQ_KEY}`},
-      body:JSON.stringify({model,messages:[{role:'system',content:'Expert football betting analyst. Respond with valid JSON only. No markdown.'},{role:'user',content:prompt}],max_tokens:1000,temperature:0.25})});
+      body:JSON.stringify({model,messages:[{role:'system',content:'You are a sharp football betting analyst. You think independently. Respond with valid JSON only. No markdown, no backticks.'},{role:'user',content:prompt}],max_tokens:1200,temperature:0.4})});
     const data=await resp.json();
     console.log(`[AI] ${model} status:${resp.status}`);
     if (resp.status!==200) return null;
@@ -394,6 +418,20 @@ RESPOND WITH ONLY VALID JSON (no markdown, no explanation):
 function getBestOdds(tip, odds, ht, at) {
   if (!tip||!odds) return {odds:null,label:tip||''};
   const t=tip.toLowerCase().trim(),h=(ht||'').toLowerCase(),a=(at||'').toLowerCase();
+  // Team individual goal markets (checked first — more specific)
+  const isHome=h.split(' ').filter(w=>w.length>2).some(w=>t.startsWith(w));
+  const isAway=a.split(' ').filter(w=>w.length>2).some(w=>t.startsWith(w));
+  if (t.includes('over 0.5 goals')&&isHome) return {odds:odds.homeOver05||null,label:ht+' Over 0.5 Goals'};
+  if (t.includes('over 1.5 goals')&&isHome) return {odds:odds.homeOver15||null,label:ht+' Over 1.5 Goals'};
+  if (t.includes('under 0.5 goals')&&isHome) return {odds:odds.homeUnder05||null,label:ht+' Under 0.5 Goals'};
+  if (t.includes('under 1.5 goals')&&isHome) return {odds:odds.homeUnder15||null,label:ht+' Under 1.5 Goals'};
+  if (t.includes('over 2.5 goals')&&isHome) return {odds:odds.homeOver25||null,label:ht+' Over 2.5 Goals'};
+  if (t.includes('over 0.5 goals')&&isAway) return {odds:odds.awayOver05||null,label:at+' Over 0.5 Goals'};
+  if (t.includes('over 1.5 goals')&&isAway) return {odds:odds.awayOver15||null,label:at+' Over 1.5 Goals'};
+  if (t.includes('under 0.5 goals')&&isAway) return {odds:odds.awayUnder05||null,label:at+' Under 0.5 Goals'};
+  if (t.includes('under 1.5 goals')&&isAway) return {odds:odds.awayUnder15||null,label:at+' Under 1.5 Goals'};
+  if (t.includes('over 2.5 goals')&&isAway) return {odds:odds.awayOver25||null,label:at+' Over 2.5 Goals'};
+  // Total goals markets
   if (t.includes('over 4.5')) return {odds:odds.over45,label:'Over 4.5 Goals'};
   if (t.includes('under 3.5')) return {odds:odds.under35,label:'Under 3.5 Goals'};
   if (t.includes('over 3.5')) return {odds:odds.over35,label:'Over 3.5 Goals'};
@@ -401,8 +439,8 @@ function getBestOdds(tip, odds, ht, at) {
   if (t.includes('over 2.5')) return {odds:odds.over25,label:'Over 2.5 Goals'};
   if (t.includes('under 1.5')) return {odds:odds.under15,label:'Under 1.5 Goals'};
   if (t.includes('over 1.5')) return {odds:odds.over15,label:'Over 1.5 Goals'};
-  if (t.includes('both teams to score')||t==='btts yes') return {odds:odds.bttsYes,label:'BTTS - Yes'};
-  if (t.includes('both teams not')||t==='btts no') return {odds:odds.bttsNo,label:'BTTS - No'};
+  if (t.includes('both teams to score - yes')||t.includes('btts - yes')||t==='btts yes') return {odds:odds.bttsYes,label:'BTTS - Yes'};
+  if (t.includes('both teams to score - no')||t.includes('btts - no')||t==='btts no') return {odds:odds.bttsNo,label:'BTTS - No'};
   if (t.includes('dnb')||t.includes('draw no bet')) {
     const isH=h.split(' ').some(w=>w.length>2&&t.includes(w));
     return isH?{odds:odds.dnbHome,label:ht+' DNB'}:{odds:odds.dnbAway,label:at+' DNB'};
