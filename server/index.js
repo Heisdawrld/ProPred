@@ -20,11 +20,11 @@ const ODDS_API_KEY     = (process.env.ODDS_API_KEY     || '').trim();
 const GROQ_KEY         = (process.env.GROQ_KEY         || '').trim();
 const FDORG_KEY        = (process.env.FDORG_KEY        || '').trim();
 
-const VERSION = '3.1.0';
+const VERSION = '3.1.1'; // Bumped version for tracking
 
 // ─── IN-MEMORY FIXTURE CACHE ──────────────────────────────────────────────
-let fixtureCache = {};   // date → { fixtures, fetchedAt }
-const FIXTURE_TTL = 30 * 60 * 1000; // 30 min
+let fixtureCache = {};   
+const FIXTURE_TTL = 30 * 60 * 1000; 
 
 // ─── UTILS ────────────────────────────────────────────────────────────────
 const today = () => new Date().toISOString().split('T')[0];
@@ -124,7 +124,7 @@ async function fetchOdds(homeTeam, awayTeam) {
           }
         }
       }
-      break; // first bookmaker only
+      break; 
     }
     return Object.keys(result).length ? result : null;
   } catch(e) {
@@ -526,8 +526,15 @@ async function analyseWithAI(fixture, formData) {
       })()
     : '';
 
-  const localStatsHome = localdb.getTeamStats(homeTeam, league);
-  const localStatsAway = localdb.getTeamStats(awayTeam, league);
+  let localStatsHome = null;
+  let localStatsAway = null;
+  
+  // Safe check in case localdb is out of sync
+  if (localdb && typeof localdb.getTeamStats === 'function') {
+      localStatsHome = localdb.getTeamStats(homeTeam, league);
+      localStatsAway = localdb.getTeamStats(awayTeam, league);
+  }
+
   const localStatsBlk = (localStatsHome && localStatsAway)
     ? ` SEASON STATS (${localStatsHome.n} matches): ${homeTeam}: ${localStatsHome.avgScored} goals/g scored | ${localStatsHome.avgConceded} conceded | ${localStatsHome.avgShots} shots/g | ${localStatsHome.avgShotsT} on target | BTTS ${localStatsHome.bttsRate}% | O2.5 ${localStatsHome.over25Rate}% ${awayTeam}: ${localStatsAway.avgScored} goals/g scored | ${localStatsAway.avgConceded} conceded | ${localStatsAway.avgShots} shots/g | ${localStatsAway.avgShotsT} on target | BTTS ${localStatsAway.bttsRate}% | O2.5 ${localStatsAway.over25Rate}%`
     : '';
@@ -566,7 +573,7 @@ Analyse this match and respond in this exact JSON format:
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
       body: JSON.stringify({
-        model: 'llama-3.1-8b-instant', // FIXED: FASTER MODEL TO PREVENT 429 ERRORS
+        model: 'llama-3.1-8b-instant', 
         messages: [
           { role: 'system', content: 'You are a professional football betting analyst. You study form, odds, and market value. Respond ONLY with valid JSON, no markdown, no preamble.' },
           { role: 'user', content: prompt },
@@ -582,7 +589,7 @@ Analyse this match and respond in this exact JSON format:
     const data = await res.json();
     let text = data.choices?.[0]?.message?.content || '{}';
     
-    // FIXED: STRIP MARKDOWN BEFORE PARSING
+    // STRIP MARKDOWN BEFORE PARSING
     text = text.replace(/```json/gi, '').replace(/```/g, '').trim();
 
     return { ...JSON.parse(text), is_blind: isBlind };
@@ -882,7 +889,9 @@ app.get('/api/bsd-predictions', async (req, res) => {
 
 app.post('/api/bsd-predictions/refresh', async (req, res) => {
   try {
-    bsd.updateCache();
+    if (bsd && typeof bsd.updateCache === 'function') {
+      bsd.updateCache();
+    }
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
@@ -899,9 +908,18 @@ app.listen(PORT, async () => {
     console.log('[PROPRED] Today\'s fixtures loaded');
   } catch(e) {}
 
-  localdb.init();
+  // BULLETPROOF CHECK: Prevents crash if localdb.js is out of sync
+  if (localdb && typeof localdb.init === 'function') {
+    localdb.init();
+  } else {
+    console.warn('[PROPRED] Warning: localdb.init is missing. Your localdb.js file is outdated on Render.');
+  }
 
+  // BULLETPROOF CHECK: Prevents crash if bsd.js is out of sync
   if (process.env.BSD_API_KEY) {
-    bsd.scheduleRefresh();
+    if (bsd && typeof bsd.scheduleRefresh === 'function') {
+      bsd.scheduleRefresh();
+      console.log('[PROPRED] BSD predictions scheduled');
+    }
   }
 });
