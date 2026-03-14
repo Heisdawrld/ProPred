@@ -1,4 +1,4 @@
- 'use strict';
+'use strict';
 
 const express  = require('express');
 const path     = require('path');
@@ -108,38 +108,154 @@ async function fetchOdds(homeTeam, awayTeam) {
   }
 }
 
-// ─── API-FOOTBALL: FETCH FIXTURES ─────────────────────────────────────────
-async function fetchFixturesAPIFootball(date) {
-  if (!API_FOOTBALL_KEY) return [];
+// ─── FDORG COMPETITION MAP ────────────────────────────────────────────────
+const FDORG_COMPS = {
+  'PL':  { name: 'Premier League',   country: 'England' },
+  'BL1': { name: 'Bundesliga',       country: 'Germany' },
+  'SA':  { name: 'Serie A',          country: 'Italy'   },
+  'PD':  { name: 'La Liga',          country: 'Spain'   },
+  'FL1': { name: 'Ligue 1',          country: 'France'  },
+  'DED': { name: 'Eredivisie',       country: 'Netherlands' },
+  'PPL': { name: 'Primeira Liga',    country: 'Portugal' },
+  'CL':  { name: 'Champions League', country: 'Europe'  },
+  'EL':  { name: 'Europa League',    country: 'Europe'  },
+  'EC':  { name: 'European Championship', country: 'Europe' },
+  'WC':  { name: 'World Cup',        country: 'World'   },
+  'BSA': { name: 'Brasileirao',      country: 'Brazil'  },
+  'ELC': { name: 'Championship',     country: 'England' },
+};
+
+// ─── FETCH FIXTURES: FDORG (primary) ──────────────────────────────────────
+async function fetchFixturesFDOrg(date) {
+  if (!FDORG_KEY) return [];
   try {
-    const res = await fetch(
-      `https://v3.football.api-sports.io/fixtures?date=${date}`,
-      { headers: { 'x-apisports-key': API_FOOTBALL_KEY }, timeout: 8000 }
-    );
-    if (!res.ok) return [];
-    const data = await res.json();
-    return (data.response || []).map(f => ({
-      id:        f.fixture.id,
-      league:    f.league.name,
-      leagueId:  f.league.id,
-      homeTeam:  f.teams.home.name,
-      awayTeam:  f.teams.away.name,
-      homeLogo:  f.teams.home.logo,
-      awayLogo:  f.teams.away.logo,
-      homeId:    f.teams.home.id,
-      awayId:    f.teams.away.id,
-      date:      f.fixture.date,
-      status:    f.fixture.status.short,
-      homeGoals: f.goals.home,
-      awayGoals: f.goals.away,
-      venue:     f.fixture.venue?.name || null,
-      slug:      f.league.name.toLowerCase().replace(/\s+/g, '-'),
-      fdorgMatchId: null,
-    }));
+    const results = [];
+    // Fetch all competitions in parallel
+    const fetches = Object.entries(FDORG_COMPS).map(async ([code, meta]) => {
+      try {
+        const res = await fetch(
+          `https://api.football-data.org/v4/competitions/${code}/matches?dateFrom=${date}&dateTo=${date}`,
+          { headers: { 'X-Auth-Token': FDORG_KEY }, timeout: 8000 }
+        );
+        if (!res.ok) return [];
+        const data = await res.json();
+        return (data.matches || []).map(m => ({
+          id:          `fdorg-${m.id}`,
+          fdorgId:     m.id,
+          league:      meta.name,
+          leagueCode:  code,
+          homeTeam:    m.homeTeam.name,
+          awayTeam:    m.awayTeam.name,
+          homeLogo:    m.homeTeam.crest || null,
+          awayLogo:    m.awayTeam.crest || null,
+          homeId:      m.homeTeam.id,
+          awayId:      m.awayTeam.id,
+          date:        m.utcDate,
+          status:      normFDOrgStatus(m.status),
+          homeGoals:   m.score?.fullTime?.home ?? null,
+          awayGoals:   m.score?.fullTime?.away ?? null,
+          venue:       m.venue || null,
+          slug:        meta.name.toLowerCase().replace(/\s+/g, '-'),
+          fdorgMatchId: m.id,
+        }));
+      } catch(e) {
+        console.error(`[FIXTURES/FDORG] ${code}:`, e.message);
+        return [];
+      }
+    });
+    const all = await Promise.all(fetches);
+    return all.flat();
   } catch(e) {
-    console.error('[FIXTURES/API-FOOTBALL]', e.message);
+    console.error('[FIXTURES/FDORG]', e.message);
     return [];
   }
+}
+
+function normFDOrgStatus(s) {
+  if (!s) return 'NS';
+  if (s === 'FINISHED') return 'FT';
+  if (s === 'IN_PLAY' || s === 'PAUSED') return '1H';
+  if (s === 'HALFTIME') return 'HT';
+  if (s === 'TIMED' || s === 'SCHEDULED') return 'NS';
+  if (s === 'POSTPONED') return 'PST';
+  if (s === 'CANCELLED') return 'CANC';
+  return 'NS';
+}
+
+// ─── FETCH FIXTURES: ESPN (fallback for non-FDORG leagues) ────────────────
+const ESPN_LEAGUES = [
+  { slug: 'mex.1',  name: 'Liga MX'       },
+  { slug: 'usa.1',  name: 'MLS'           },
+  { slug: 'ger.2',  name: 'Bundesliga 2'  },
+  { slug: 'fra.2',  name: 'Ligue 2'       },
+  { slug: 'esp.2',  name: 'Segunda Division' },
+  { slug: 'eng.2',  name: 'Championship'  },
+  { slug: 'tur.1',  name: 'Super Lig'     },
+  { slug: 'sco.1',  name: 'Scottish Prem' },
+  { slug: 'arg.1',  name: 'Primera Division' },
+  { slug: 'por.1',  name: 'Primeira Liga' },
+];
+
+async function fetchFixturesESPN(date) {
+  const espnDate = date.replace(/-/g, '');
+  const results = [];
+  await Promise.all(ESPN_LEAGUES.map(async ({ slug, name }) => {
+    try {
+      const res = await fetch(
+        `https://site.api.espn.com/apis/site/v2/sports/soccer/${slug}/scoreboard?dates=${espnDate}`,
+        { timeout: 6000 }
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      for (const ev of (data.events || [])) {
+        const comp = ev.competitions?.[0];
+        if (!comp) continue;
+        const [c1, c2] = comp.competitors || [];
+        if (!c1 || !c2) continue;
+        const home = c1.homeAway === 'home' ? c1 : c2;
+        const away = c1.homeAway === 'away' ? c1 : c2;
+        const statusState = ev.status?.type?.state || 'pre';
+        const statusName  = ev.status?.type?.shortDetail || 'NS';
+        let status = 'NS';
+        if (statusState === 'post') status = 'FT';
+        else if (statusState === 'in') status = '1H';
+        const hg = statusState === 'post' || statusState === 'in' ? parseInt(home.score) : null;
+        const ag = statusState === 'post' || statusState === 'in' ? parseInt(away.score) : null;
+        results.push({
+          id:          `espn-${ev.id}`,
+          league:      name,
+          homeTeam:    home.team?.displayName || home.team?.name,
+          awayTeam:    away.team?.displayName || away.team?.name,
+          homeLogo:    home.team?.logo || null,
+          awayLogo:    away.team?.logo || null,
+          homeId:      home.team?.id || null,
+          awayId:      away.team?.id || null,
+          date:        ev.date,
+          status,
+          homeGoals:   isNaN(hg) ? null : hg,
+          awayGoals:   isNaN(ag) ? null : ag,
+          venue:       comp.venue?.fullName || null,
+          slug,
+          fdorgMatchId: null,
+        });
+      }
+    } catch(e) {
+      console.error(`[FIXTURES/ESPN] ${slug}:`, e.message);
+    }
+  }));
+  return results;
+}
+
+// ─── COMBINED FIXTURE LOADER ───────────────────────────────────────────────
+async function fetchAllFixtures(date) {
+  const [fdorg, espn] = await Promise.all([
+    fetchFixturesFDOrg(date),
+    fetchFixturesESPN(date),
+  ]);
+  // Deduplicate ESPN fixtures already covered by FDORG
+  const fdorgLeagues = new Set(fdorg.map(f => f.league.toLowerCase()));
+  const espnFiltered = espn.filter(f => !fdorgLeagues.has(f.league.toLowerCase()));
+  return [...fdorg, ...espnFiltered];
 }
 
 // ─── FORM: FDORG ──────────────────────────────────────────────────────────
@@ -517,14 +633,22 @@ function computeValue(ai, odds) {
 async function loadFixtures(date) {
   const cached = fixtureCache[date];
   if (cached && Date.now() - cached.fetchedAt < FIXTURE_TTL) return cached.fixtures;
-  const fixtures = await fetchFixturesAPIFootball(date);
-  // Enrich with odds
-  const enriched = await Promise.all(fixtures.map(async f => {
+
+  console.log(`[FIXTURES] Fetching ${date}…`);
+  const fixtures = await fetchAllFixtures(date);
+  console.log(`[FIXTURES] Got ${fixtures.length} fixtures (FDORG + ESPN)`);
+
+  // Enrich with odds sequentially to avoid rate limits
+  const enriched = [];
+  for (const f of fixtures) {
     try {
       const odds = await fetchOdds(f.homeTeam, f.awayTeam);
-      return { ...f, odds: odds || {}, hasOdds: !!odds };
-    } catch(e) { return { ...f, odds: {}, hasOdds: false }; }
-  }));
+      enriched.push({ ...f, odds: odds || {}, hasOdds: !!odds });
+    } catch(e) {
+      enriched.push({ ...f, odds: {}, hasOdds: false });
+    }
+  }
+
   fixtureCache[date] = { fixtures: enriched, fetchedAt: Date.now() };
   return enriched;
 }
@@ -577,30 +701,33 @@ app.get('/api/match/:id', async (req, res) => {
       if (fixture) break;
     }
 
-    // If not in cache, fetch from API-Football directly
+    // If not in cache, try fetching from FDORG directly by match id
     if (!fixture) {
-      if (API_FOOTBALL_KEY) {
+      if (FDORG_KEY && id.startsWith && !id.toString().startsWith('espn-')) {
         try {
-          const r = await fetch(`https://v3.football.api-sports.io/fixtures?id=${id}`, {
-            headers: { 'x-apisports-key': API_FOOTBALL_KEY }, timeout: 6000,
+          const fdorgId = id.toString().replace('fdorg-', '');
+          const r = await fetch(`https://api.football-data.org/v4/matches/${fdorgId}`, {
+            headers: { 'X-Auth-Token': FDORG_KEY }, timeout: 6000,
           });
-          const data = await r.json();
-          const f = data.response?.[0];
-          if (f) {
-            const odds = await fetchOdds(f.teams.home.name, f.teams.away.name);
+          if (r.ok) {
+            const m = await r.json();
+            const odds = await fetchOdds(m.homeTeam.name, m.awayTeam.name);
             fixture = {
-              id: f.fixture.id, league: f.league.name, leagueId: f.league.id,
-              homeTeam: f.teams.home.name, awayTeam: f.teams.away.name,
-              homeLogo: f.teams.home.logo, awayLogo: f.teams.away.logo,
-              homeId: f.teams.home.id, awayId: f.teams.away.id,
-              date: f.fixture.date, status: f.fixture.status.short,
-              homeGoals: f.goals.home, awayGoals: f.goals.away,
-              venue: f.fixture.venue?.name || null,
-              slug: f.league.name.toLowerCase().replace(/\s+/g, '-'),
+              id, fdorgId: m.id,
+              league: m.competition?.name || 'Unknown',
+              homeTeam: m.homeTeam.name, awayTeam: m.awayTeam.name,
+              homeLogo: m.homeTeam.crest || null, awayLogo: m.awayTeam.crest || null,
+              homeId: m.homeTeam.id, awayId: m.awayTeam.id,
+              date: m.utcDate, status: normFDOrgStatus(m.status),
+              homeGoals: m.score?.fullTime?.home ?? null,
+              awayGoals: m.score?.fullTime?.away ?? null,
+              venue: m.venue || null,
+              slug: (m.competition?.name || '').toLowerCase().replace(/\s+/g, '-'),
+              fdorgMatchId: m.id,
               odds: odds || {}, hasOdds: !!odds,
             };
           }
-        } catch(e) { console.error('[MATCH lookup]', e.message); }
+        } catch(e) { console.error('[MATCH lookup/FDORG]', e.message); }
       }
       if (!fixture) return res.status(404).json({ error: 'Fixture not found' });
     }
@@ -708,17 +835,15 @@ app.post('/api/settle', async (req, res) => {
     let settled = 0;
     for (const bet of pending) {
       try {
-        if (!API_FOOTBALL_KEY) continue;
-        const r = await fetch(`https://v3.football.api-sports.io/fixtures?id=${bet.fixture_id}`, {
-          headers: { 'x-apisports-key': API_FOOTBALL_KEY }, timeout: 5000,
+        if (!FDORG_KEY) continue;
+        const fdorgId = bet.fixture_id.toString().replace('fdorg-', '');
+        const r = await fetch(`https://api.football-data.org/v4/matches/${fdorgId}`, {
+          headers: { 'X-Auth-Token': FDORG_KEY }, timeout: 5000,
         });
-        const data = await r.json();
-        const f = data.response?.[0];
-        if (!f) continue;
-        const status = f.fixture.status.short;
-        const isFT = ['FT','AET','PEN'].includes(status);
-        if (!isFT) continue;
-        const hg = f.goals.home, ag = f.goals.away;
+        if (!r.ok) continue;
+        const m = await r.json();
+        if (m.status !== 'FINISHED') continue;
+        const hg = m.score?.fullTime?.home, ag = m.score?.fullTime?.away;
         if (hg == null || ag == null) continue;
         const n = db.settleBet(bet.fixture_id, hg, ag);
         settled += n;
