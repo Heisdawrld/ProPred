@@ -25,9 +25,7 @@ ldb.exec(`
   CREATE TABLE IF NOT EXISTS matches (
     id TEXT PRIMARY KEY, league TEXT, season TEXT, date TEXT,
     home_team TEXT, away_team TEXT, home_goals INTEGER, away_goals INTEGER,
-    home_shots INTEGER, away_shots INTEGER, home_shots_target INTEGER, away_shots_target INTEGER,
-    home_corners INTEGER, away_corners INTEGER, home_yellow INTEGER, away_yellow INTEGER,
-    b365_home REAL, b365_draw REAL, b365_away REAL, created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (datetime('now'))
   );
   CREATE TABLE IF NOT EXISTS fs_fixtures (
     match_id TEXT PRIMARY KEY,
@@ -61,34 +59,35 @@ async function syncApifyFixtures() {
   if (!APIFY_TOKEN || !ID) return;
 
   try {
-    let res, url = `https://api.apify.com/v2/acts/${ID}/runs/last/dataset/items?token=${APIFY_TOKEN}`;
+    let res, url = \`https://api.apify.com/v2/acts/\${ID}/runs/last/dataset/items?token=\${APIFY_TOKEN}\`;
     res = await fetch(url);
     if (res.status === 404) {
-      url = `https://api.apify.com/v2/actor-tasks/${ID}/runs/last/dataset/items?token=${APIFY_TOKEN}`;
+      url = \`https://api.apify.com/v2/actor-tasks/\${ID}/runs/last/dataset/items?token=\${APIFY_TOKEN}\`;
       res = await fetch(url);
     }
     if (res.status === 404) {
-      url = `https://api.apify.com/v2/datasets/${ID}/items?token=${APIFY_TOKEN}`;
+      url = \`https://api.apify.com/v2/datasets/\${ID}/items?token=\${APIFY_TOKEN}\`;
       res = await fetch(url);
     }
+    
     const data = await res.json();
     const currentYear = new Date().getFullYear().toString();
 
     const formattedRows = data.map(item => {
       let dOnly = null;
       if (item.match_date) {
-        // Flashscore fix: handle "14.03. 15:00" or "14.03.2026 15:00"
+        // Fix: Ensure date is stored as YYYY-MM-DD
         const parts = item.match_date.split(' ')[0].split('.').filter(p => p.trim());
         const d = parts[0], m = parts[1];
         let y = parts[2] || currentYear;
         if (y.length < 4) y = currentYear;
-        dOnly = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+        dOnly = \`\${y}-\${m.padStart(2, '0')}-\${d.padStart(2, '0')}\`;
       }
       return { ...item, date_only: dOnly };
     }).filter(r => r.date_only && r.match_id);
 
     insertManyFS(formattedRows);
-    console.log(`[LOCALDB] SUCCESS! Ingested ${formattedRows.length} fixtures.`);
+    console.log(\`[LOCALDB] SUCCESS! Ingested \${formattedRows.length} fixtures.\`);
   } catch(e) { console.error('[LOCALDB] Sync failed:', e.message); }
 }
 
@@ -101,5 +100,5 @@ async function init() {
   setInterval(syncApifyFixtures, 12 * 60 * 60 * 1000);
 }
 
-module.exports = { getFlashscoreFixtures, syncApifyFixtures, init };
+module.exports = { getLocalForm: () => null, getTeamStats: () => null, getFlashscoreFixtures, syncApifyFixtures, refresh: async () => {}, init };
 }
