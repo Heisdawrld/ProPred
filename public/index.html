@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>PROPRED - Flashscore</title>
+<title>PROPRED PRO</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -44,9 +44,6 @@ nav { background: var(--card); padding: 1rem; border-bottom: 1px solid var(--bor
   background: #000; color: var(--gold); font-family: var(--mono);
   font-weight: 800; text-align: center; padding: 3px 0; border-radius: 3px; font-size: 0.85rem;
 }
-
-#modal { position: fixed; inset: 0; background: rgba(0,0,0,0.9); z-index: 1000; display: none; padding: 15px; overflow-y: auto; }
-.modal-content { background: var(--bg2); border-radius: 12px; border: 1px solid var(--border); max-width: 500px; margin: 0 auto; }
 .loading { padding: 50px; text-align: center; color: var(--dim); font-size: 0.8rem; }
 </style>
 </head>
@@ -54,36 +51,32 @@ nav { background: var(--card); padding: 1rem; border-bottom: 1px solid var(--bor
 
 <nav>
   <div class="logo">PROPRED PRO</div>
-  <button onclick="init()" style="background:none; border:none; color:var(--accent); font-size:0.7rem; font-weight:bold;">REFRESH</button>
+  <button onclick="init()" style="background:none; border:none; color:var(--accent); font-size:0.7rem; font-weight:bold; cursor:pointer;">REFRESH</button>
 </nav>
 
-<div id="fxList"><div class="loading">Waking up the engine...</div></div>
-
-<div id="modal" onclick="if(event.target===this)this.style.display='none'">
-  <div class="modal-content" id="modalBody"></div>
-</div>
+<div id="fxList"><div class="loading">Loading Scraped Fixtures...</div></div>
 
 <script>
 let allFx = [];
-const MAJOR_LEAGUES = ['premier league', 'champions league', 'la liga', 'bundesliga', 'serie a', 'ligue 1'];
+const MAJOR_LEAGUES = ['premier league', 'champions league', 'la liga', 'bundesliga', 'serie a', 'ligue 1', 'eredivisie', 'mls'];
 
 async function init() {
   const list = document.getElementById('fxList');
   try {
-    // We try to fetch from your bsd-predictions endpoint first
-    const res = await fetch('/api/bsd-predictions');
+    // This calls your server endpoint that returns the 1808 fixtures
+    const res = await fetch('/api/fixtures');
     const data = await res.json();
     
-    // Check if predictions exist in the object
-    allFx = data.predictions || []; 
+    // In your server/index.js, the data is sent inside a "fixtures" array
+    allFx = data.fixtures || []; 
     
     if (allFx.length === 0) {
-        list.innerHTML = '<div class="loading">No fixtures found for today.</div>';
+        list.innerHTML = '<div class="loading">No fixtures found. Did you run the Apify sync?</div>';
         return;
     }
     render();
   } catch (e) {
-    list.innerHTML = '<div class="loading">Error: Connection failed.</div>';
+    list.innerHTML = '<div class="loading">Error: Could not connect to the database.</div>';
   }
 }
 
@@ -91,12 +84,14 @@ function render() {
   const container = document.getElementById('fxList');
   const groups = {};
   
+  // Grouping the scraped data
   allFx.forEach(f => {
     const lName = f.league || 'Other Leagues';
     if (!groups[lName]) groups[lName] = [];
     groups[lName].push(f);
   });
 
+  // Sorting: Big leagues first, then everything else
   container.innerHTML = Object.keys(groups).sort((a, b) => {
     const aM = MAJOR_LEAGUES.some(l => a.toLowerCase().includes(l));
     const bM = MAJOR_LEAGUES.some(l => b.toLowerCase().includes(l));
@@ -110,15 +105,23 @@ function render() {
         <div class="lh-chevron">▼</div>
       </div>
       <div class="league-matches">
-        ${groups[l].map(f => `
-          <div class="fs-row" onclick="alert('Analysis for ${f.home_team} coming soon!')">
-            <div class="fs-time">${f.fixture_date ? f.fixture_date.split(' ')[1] || 'TBD' : 'TBD'}</div>
-            <div class="fs-team home">${f.home_team}</div>
-            <div class="fs-score">v</div>
-            <div class="fs-team away">${f.away_team}</div>
+        ${groups[l].map(f => {
+          // Mapping exactly to your server/index.js 'loadFixtures' output
+          const home = f.homeTeam || 'Unknown';
+          const away = f.awayTeam || 'Unknown';
+          const score = (f.homeGoals !== null && f.awayGoals !== null) ? `${f.homeGoals}-${f.awayGoals}` : 'v';
+          const time = f.date ? f.date.split(' ')[1] || 'TBD' : 'TBD';
+          
+          return `
+          <div class="fs-row" onclick="alert('Analysis for ${home} vs ${away} coming soon!')">
+            <div class="fs-time">${time}</div>
+            <div class="fs-team home">${home}</div>
+            <div class="fs-score">${score}</div>
+            <div class="fs-team away">${away}</div>
             <div style="text-align:center; color:#333">☆</div>
           </div>
-        `).join('')}
+          `;
+        }).join('')}
       </div>
     </div>`;
   }).join('');
