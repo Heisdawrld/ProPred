@@ -42,66 +42,112 @@ function fuzzyTeam(a, b) {
 }
 
 // ─── ODDS API ─────────────────────────────────────────────────────────────
-async function fetchOdds(homeTeam, awayTeam) {
-  if (!ODDS_API_KEY) return null;
+// Map league name → Odds API sport key
+const ODDS_SPORT_KEYS = {
+  'premier league':    'soccer_epl',
+  'championship':      'soccer_england_championship',
+  'bundesliga':        'soccer_germany_bundesliga',
+  'bundesliga 2':      'soccer_germany_bundesliga2',
+  'serie a':           'soccer_italy_serie_a',
+  'serie b':           'soccer_italy_serie_b',
+  'la liga':           'soccer_spain_la_liga',
+  'segunda division':  'soccer_spain_segunda_division',
+  'ligue 1':           'soccer_france_ligue_one',
+  'ligue 2':           'soccer_france_ligue_two',
+  'eredivisie':        'soccer_netherlands_eredivisie',
+  'primeira liga':     'soccer_portugal_primeira_liga',
+  'champions league':  'soccer_uefa_champs_league',
+  'europa league':     'soccer_uefa_europa_league',
+  'mls':               'soccer_usa_mls',
+  'liga mx':           'soccer_mexico_ligamx',
+  'super lig':         'soccer_turkey_super_league',
+  'scottish prem':     'soccer_scotland_premiership',
+  'brasileirao':       'soccer_brazil_campeonato',
+  'pro league':        'soccer_belgium_first_div',
+};
+
+// In-memory odds cache: sportKey → { events, fetchedAt }
+const oddsCache = {};
+const ODDS_TTL = 60 * 60 * 1000; // 1 hour
+
+async function fetchOddsForLeague(league) {
+  if (!ODDS_API_KEY) return [];
+  const leagueKey = (league || '').toLowerCase();
+  const sportKey = ODDS_SPORT_KEYS[leagueKey] || 'soccer_epl';
+
+  // Return cached if fresh
+  const cached = oddsCache[sportKey];
+  if (cached && Date.now() - cached.fetchedAt < ODDS_TTL) return cached.events;
+
   try {
-    const markets = 'h2h,totals,btts,asian_handicap,double_chance';
+    const markets = 'h2h,totals,btts,double_chance';
     const res = await fetch(
-      `https://api.the-odds-api.com/v4/sports/soccer/odds/?apiKey=${ODDS_API_KEY}&regions=uk&markets=${markets}&oddsFormat=decimal`,
-      { timeout: 5000 }
+      `https://api.the-odds-api.com/v4/sports/${sportKey}/odds/?apiKey=${ODDS_API_KEY}&regions=uk&markets=${markets}&oddsFormat=decimal`,
+      { timeout: 8000 }
     );
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.error(`[ODDS] ${sportKey} HTTP ${res.status}`);
+      return [];
+    }
     const events = await res.json();
+    if (!Array.isArray(events)) return [];
+    oddsCache[sportKey] = { events, fetchedAt: Date.now() };
+    console.log(`[ODDS] ${sportKey} — ${events.length} events cached`);
+    return events;
+  } catch(e) {
+    console.error('[ODDS]', e.message);
+    return [];
+  }
+}
+
+function parseOddsFromEvent(event, homeTeam, awayTeam) {
+  if (!event) return null;
+  const result = {};
+  for (const bm of (event.bookmakers || [])) {
+    for (const mkt of (bm.markets || [])) {
+      if (mkt.key === 'h2h') {
+        for (const o of mkt.outcomes) {
+          if (fuzzyTeam(o.name, homeTeam)) result.home = o.price;
+          else if (fuzzyTeam(o.name, awayTeam)) result.away = o.price;
+          else if (o.name === 'Draw') result.draw = o.price;
+        }
+      }
+      if (mkt.key === 'totals') {
+        for (const o of mkt.outcomes) {
+          const pt = parseFloat(o.point);
+          if (pt === 1.5) { if (o.name === 'Over') result.over15 = o.price; else result.under15 = o.price; }
+          if (pt === 2.5) { if (o.name === 'Over') result.over25 = o.price; else result.under25 = o.price; }
+          if (pt === 3.5) { if (o.name === 'Over') result.over35 = o.price; else result.under35 = o.price; }
+          if (pt === 4.5) { if (o.name === 'Over') result.over45 = o.price; else result.under45 = o.price; }
+        }
+      }
+      if (mkt.key === 'btts') {
+        for (const o of mkt.outcomes) {
+          if (o.name === 'Yes') result.bttsYes = o.price;
+          if (o.name === 'No')  result.bttsNo  = o.price;
+        }
+      }
+      if (mkt.key === 'double_chance') {
+        for (const o of mkt.outcomes) {
+          if (o.name === '1X') result.dc1X = o.price;
+          if (o.name === 'X2') result.dcX2 = o.price;
+          if (o.name === '12') result.dc12 = o.price;
+        }
+      }
+    }
+    break; // first bookmaker only
+  }
+  return Object.keys(result).length ? result : null;
+}
+
+async function fetchOdds(homeTeam, awayTeam, league) {
+  try {
+    const events = await fetchOddsForLeague(league);
     const match = events.find(e =>
       (fuzzyTeam(e.home_team, homeTeam) && fuzzyTeam(e.away_team, awayTeam)) ||
       (fuzzyTeam(e.home_team, awayTeam) && fuzzyTeam(e.away_team, homeTeam))
     );
-    if (!match) return null;
-
-    const result = {};
-    for (const bm of (match.bookmakers || [])) {
-      for (const mkt of (bm.markets || [])) {
-        if (mkt.key === 'h2h') {
-          for (const o of mkt.outcomes) {
-            if (fuzzyTeam(o.name, homeTeam)) result.home = o.price;
-            else if (fuzzyTeam(o.name, awayTeam)) result.away = o.price;
-            else if (o.name === 'Draw') result.draw = o.price;
-          }
-        }
-        if (mkt.key === 'totals') {
-          for (const o of mkt.outcomes) {
-            const pt = parseFloat(o.point);
-            if (pt === 1.5) { if (o.name === 'Over') result.over15 = o.price; else result.under15 = o.price; }
-            if (pt === 2.5) { if (o.name === 'Over') result.over25 = o.price; else result.under25 = o.price; }
-            if (pt === 3.5) { if (o.name === 'Over') result.over35 = o.price; else result.under35 = o.price; }
-            if (pt === 4.5) { if (o.name === 'Over') result.over45 = o.price; else result.under45 = o.price; }
-          }
-        }
-        if (mkt.key === 'btts') {
-          for (const o of mkt.outcomes) {
-            if (o.name === 'Yes') result.bttsYes = o.price;
-            if (o.name === 'No')  result.bttsNo  = o.price;
-          }
-        }
-        if (mkt.key === 'double_chance') {
-          for (const o of mkt.outcomes) {
-            if (o.name === '1X') result.dc1X = o.price;
-            if (o.name === 'X2') result.dcX2 = o.price;
-            if (o.name === '12') result.dc12 = o.price;
-          }
-        }
-        if (mkt.key === 'asian_handicap') {
-          for (const o of mkt.outcomes) {
-            if (parseFloat(o.point) === -0.5) {
-              if (fuzzyTeam(o.name, homeTeam)) result.ahHome = o.price;
-              else result.ahAway = o.price;
-            }
-          }
-        }
-      }
-      break; // first bookmaker only
-    }
-    return Object.keys(result).length ? result : null;
+    return parseOddsFromEvent(match, homeTeam, awayTeam);
   } catch(e) {
     console.error('[ODDS]', e.message);
     return null;
@@ -557,13 +603,16 @@ ${h2hBlk}
 ${isBlind ? 'WARNING: No form data available. Use general knowledge but mark as speculative.' : ''}
 
 INSTRUCTIONS:
-1. Analyse home performance vs away performance separately — this is critical
-2. Look at BTTS%, Over/Under rates, goals scored/conceded to find the best market
-3. Consider all available markets: Home Win, Away Win, Draw, Over/Under 1.5/2.5/3.5, BTTS Yes/No, Double Chance, Draw No Bet
-4. Only pick a market where your probability EXCEEDS the bookmaker implied probability by at least 5%
-5. If odds are unavailable, still give your best pick based on data
-6. Do NOT default to home win just because they are at home — follow the data
-7. Pick the single best value bet across ALL markets, not just the match result
+1. Analyse home performance vs away performance separately — this is the most important factor
+2. Scan ALL markets before deciding: 1X2, Over/Under 1.5/2.5/3.5/4.5, BTTS Yes/No, Double Chance, Draw No Bet
+3. Pick the market where your TRUE probability is highest vs the implied probability — not just the safest pick
+4. If a team scores 2+ goals in 80% of home games, Over 1.5 is lazy — consider Over 2.5 or Over 3.5
+5. If both teams score in 70%+ of games, BTTS Yes is often better value than a result pick
+6. If one team is dominant at home but you're unsure of a clean win, DNB or Double Chance may be smarter
+7. A straight Home Win or Away Win at good odds beats a watered-down Double Chance if the data supports it
+8. NEVER pick Over 1.5 if Over 2.5 is clearly justified by the data — pick the highest line the data supports
+9. If odds unavailable, still give best pick — mark as AI PICK
+10. Be intentional and decisive — punters want clear, confident picks with real reasoning
 
 Respond ONLY in this exact JSON format:
 {
@@ -682,7 +731,7 @@ async function loadFixtures(date) {
   const enriched = [];
   for (const f of fixtures) {
     try {
-      const odds = await fetchOdds(f.homeTeam, f.awayTeam);
+      const odds = await fetchOdds(f.homeTeam, f.awayTeam, f.league);
       enriched.push({ ...f, odds: odds || {}, hasOdds: !!odds });
     } catch(e) {
       enriched.push({ ...f, odds: {}, hasOdds: false });
@@ -751,7 +800,7 @@ app.get('/api/match/:id', async (req, res) => {
           });
           if (r.ok) {
             const m = await r.json();
-            const odds = await fetchOdds(m.homeTeam.name, m.awayTeam.name);
+            const odds = await fetchOdds(m.homeTeam.name, m.awayTeam.name, m.competition?.name);
             fixture = {
               id, fdorgId: m.id,
               league: m.competition?.name || 'Unknown',
