@@ -2,131 +2,85 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <title>PROPRED PRO</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;800&display=swap" rel="stylesheet">
 <style>
-:root {
-  --bg: #08080f; --bg2: #0d0d1a; --card: #14142a;
-  --border: #1f1f40; --accent: #5b6ef5; --text: #f0f0ff;
-  --gold: #ffcf40; --dim: #5a5a8a; --mono: 'JetBrains Mono', monospace;
-}
-* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-body { background: var(--bg); color: var(--text); font-family: 'Inter', sans-serif; }
-
-nav { background: var(--card); padding: 1rem; border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 100; display: flex; justify-content: space-between; align-items: center; }
-.logo { font-weight: 900; color: var(--accent); letter-spacing: -1px; }
-
+:root { --bg: #08080f; --bg2: #0d0d1a; --card: #14142a; --border: #1f1f40; --accent: #5b6ef5; --text: #f0f0ff; --gold: #ffcf40; --dim: #5a5a8a; }
+body { background: var(--bg); color: var(--text); font-family: 'Inter', sans-serif; margin: 0; padding-bottom: 60px; }
+nav { background: var(--card); padding: 12px 15px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 100; }
+.logo { font-weight: 900; color: var(--accent); font-size: 1.1rem; }
 #fxList { display: flex; flex-direction: column; gap: 2px; padding: 5px; }
-
 .league-group { background: var(--bg2); margin-bottom: 4px; border-radius: 4px; overflow: hidden; border: 1px solid var(--border); }
-.league-header {
-  background: var(--card); padding: 10px 15px;
-  display: flex; align-items: center; justify-content: space-between;
-  cursor: pointer; border-left: 3px solid var(--accent);
-}
-.lh-title { font-size: 0.7rem; font-weight: 800; text-transform: uppercase; display: flex; align-items: center; gap: 8px; }
-.lh-chevron { font-size: 0.6rem; color: var(--dim); transition: transform 0.2s; }
-.league-group.collapsed .lh-chevron { transform: rotate(-90deg); }
+.league-header { background: var(--card); padding: 10px 15px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; border-left: 3px solid var(--accent); }
+.lh-title { font-size: 0.7rem; font-weight: 800; text-transform: uppercase; }
 .league-group.collapsed .league-matches { display: none; }
-
-.fs-row {
-  display: grid; grid-template-columns: 55px 1fr 60px 1fr 30px;
-  align-items: center; padding: 12px 10px; background: var(--bg);
-  border-bottom: 1px solid rgba(255,255,255,0.03); cursor: pointer;
-}
-.fs-row:hover { background: var(--card); }
+.fs-row { display: grid; grid-template-columns: 55px 1fr 60px 1fr 30px; align-items: center; padding: 12px 10px; background: var(--bg); border-bottom: 1px solid rgba(255,255,255,0.03); cursor: pointer; }
 .fs-time { font-size: 0.65rem; color: var(--dim); font-weight: 700; text-align: center; }
 .fs-team { font-size: 0.8rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fs-team.home { text-align: right; padding-right: 8px; }
 .fs-team.away { text-align: left; padding-left: 8px; }
-.fs-score {
-  background: #000; color: var(--gold); font-family: var(--mono);
-  font-weight: 800; text-align: center; padding: 3px 0; border-radius: 3px; font-size: 0.85rem;
-}
+.fs-score { background: #000; color: var(--gold); font-weight: 800; text-align: center; padding: 3px 0; border-radius: 3px; font-size: 0.85rem; }
 .loading { padding: 50px; text-align: center; color: var(--dim); font-size: 0.8rem; }
 </style>
 </head>
 <body>
-
-<nav>
-  <div class="logo">PROPRED PRO</div>
-  <button onclick="init()" style="background:none; border:none; color:var(--accent); font-size:0.7rem; font-weight:bold; cursor:pointer;">REFRESH</button>
-</nav>
-
-<div id="fxList"><div class="loading">Loading Scraped Fixtures...</div></div>
-
+<nav><div class="logo">PROPRED PRO</div><button onclick="init()" style="background:none; border:none; color:var(--accent); font-weight:bold; cursor:pointer;">REFRESH</button></nav>
+<div id="fxList"><div class="loading">Fetching Scraped Matches...</div></div>
 <script>
 let allFx = [];
-const MAJOR_LEAGUES = ['premier league', 'champions league', 'la liga', 'bundesliga', 'serie a', 'ligue 1', 'eredivisie', 'mls'];
+const MAJORS = ['premier league', 'champions league', 'la liga', 'bundesliga', 'serie a', 'ligue 1'];
 
 async function init() {
   const list = document.getElementById('fxList');
   try {
-    // This calls your server endpoint that returns the 1808 fixtures
     const res = await fetch('/api/fixtures');
     const data = await res.json();
-    
-    // In your server/index.js, the data is sent inside a "fixtures" array
     allFx = data.fixtures || []; 
-    
-    if (allFx.length === 0) {
-        list.innerHTML = '<div class="loading">No fixtures found. Did you run the Apify sync?</div>';
-        return;
-    }
+    if (allFx.length === 0) { list.innerHTML = '<div class="loading">No matches found for today. Check Apify!</div>'; return; }
     render();
-  } catch (e) {
-    list.innerHTML = '<div class="loading">Error: Could not connect to the database.</div>';
-  }
+  } catch (e) { list.innerHTML = '<div class="loading">Server Connection Error</div>'; }
 }
 
 function render() {
   const container = document.getElementById('fxList');
   const groups = {};
-  
-  // Grouping the scraped data
   allFx.forEach(f => {
     const lName = f.league || 'Other Leagues';
     if (!groups[lName]) groups[lName] = [];
     groups[lName].push(f);
   });
-
-  // Sorting: Big leagues first, then everything else
   container.innerHTML = Object.keys(groups).sort((a, b) => {
-    const aM = MAJOR_LEAGUES.some(l => a.toLowerCase().includes(l));
-    const bM = MAJOR_LEAGUES.some(l => b.toLowerCase().includes(l));
+    const aM = MAJORS.some(l => a.toLowerCase().includes(l));
+    const bM = MAJORS.some(l => b.toLowerCase().includes(l));
     return bM - aM || a.localeCompare(b);
   }).map(l => {
-    const isMajor = MAJOR_LEAGUES.some(m => l.toLowerCase().includes(m));
+    const isMajor = MAJORS.some(m => l.toLowerCase().includes(m));
     return `
     <div class="league-group ${isMajor ? '' : 'collapsed'}">
       <div class="league-header" onclick="this.parentElement.classList.toggle('collapsed')">
         <div class="lh-title">🏆 ${l}</div>
-        <div class="lh-chevron">▼</div>
+        <div style="font-size:0.6rem; color:var(--dim)">▼</div>
       </div>
       <div class="league-matches">
         ${groups[l].map(f => {
-          // Mapping exactly to your server/index.js 'loadFixtures' output
           const home = f.homeTeam || 'Unknown';
           const away = f.awayTeam || 'Unknown';
-          const score = (f.homeGoals !== null && f.awayGoals !== null) ? `${f.homeGoals}-${f.awayGoals}` : 'v';
           const time = f.date ? f.date.split(' ')[1] || 'TBD' : 'TBD';
-          
+          const score = (f.homeGoals !== null) ? `${f.homeGoals}-${f.awayGoals}` : 'v';
           return `
-          <div class="fs-row" onclick="alert('Analysis for ${home} vs ${away} coming soon!')">
+          <div class="fs-row" onclick="alert('Analysis for ${home} coming soon!')">
             <div class="fs-time">${time}</div>
             <div class="fs-team home">${home}</div>
             <div class="fs-score">${score}</div>
             <div class="fs-team away">${away}</div>
-            <div style="text-align:center; color:#333">☆</div>
-          </div>
-          `;
+            <div style="text-align:center; color:#222">☆</div>
+          </div>`;
         }).join('')}
       </div>
     </div>`;
   }).join('');
 }
-
 init();
 </script>
 </body>
