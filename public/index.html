@@ -663,10 +663,6 @@ async function loadMatch(id) {
   try {
     let m = await fetch(`/api/match/${id}`).then(r => r.json());
     if (m.error) throw new Error(m.error);
-    if (!m.analysis) {
-      await new Promise(r => setTimeout(r, 1800));
-      m = await fetch(`/api/match/${id}`).then(r => r.json());
-    }
     const isFT = ['FT','AET','PEN'].includes(m.status) || (m.status || '').toLowerCase().includes('final');
     const alreadyBet = betDone[id];
     const o = m.odds || {};
