@@ -69,44 +69,66 @@ const insertManyFS = ldb.transaction(rows => {
 
 async function syncApifyFixtures() {
   const APIFY_TOKEN = process.env.APIFY_TOKEN;
-  const APIFY_ACTOR_ID = process.env.APIFY_ACTOR_ID; 
+  const ID = process.env.APIFY_ACTOR_ID; 
   
-  if (!APIFY_TOKEN || !APIFY_ACTOR_ID) {
+  if (!APIFY_TOKEN || !ID) {
     console.log('[LOCALDB] Apify credentials missing. Skipping Flashscore sync.');
     return;
   }
 
-  console.log('[LOCALDB] Syncing 1,800+ fixtures from Apify...');
+  console.log(`[LOCALDB] Syncing Apify fixtures using ID: ${ID}...`);
   try {
-    const url = `https://api.apify.com/v2/acts/${APIFY_ACTOR_ID}/runs/last/dataset/items?token=${APIFY_TOKEN}`;
-    const res = await fetch(url);
+    let res;
+    let url;
+
+    // TRY 1: Assume it's an Actor ID
+    url = `https://api.apify.com/v2/acts/${ID}/runs/last/dataset/items?token=${APIFY_TOKEN}`;
+    res = await fetch(url);
+    
+    // TRY 2: Assume it's a Task ID
+    if (res.status === 404) {
+      console.log('[LOCALDB] ID not found as Actor. Pivoting to Task endpoint...');
+      url = `https://api.apify.com/v2/actor-tasks/${ID}/runs/last/dataset/items?token=${APIFY_TOKEN}`;
+      res = await fetch(url);
+    }
+
+    // TRY 3: Assume it's a direct Dataset ID (Most likely if copied from the data table)
+    if (res.status === 404) {
+      console.log('[LOCALDB] ID not found as Task. Pivoting to direct Dataset endpoint...');
+      url = `https://api.apify.com/v2/datasets/${ID}/items?token=${APIFY_TOKEN}`;
+      res = await fetch(url);
+    }
+
+    // Explicitly catch Key Issues
+    if (res.status === 401 || res.status === 403) {
+        throw new Error(`Auth Error (${res.status}). Your APIFY_TOKEN is invalid.`);
+    }
+
     if (!res.ok) throw new Error(`Apify HTTP ${res.status}`);
     
     const data = await res.json();
     if (!Array.isArray(data)) throw new Error('Apify response is not an array');
+    if (data.length === 0) throw new Error('Apify returned an empty dataset. Check your run on Apify.');
 
     const formattedRows = data.map(item => {
       let dOnly = null;
       if (item.match_date) {
-        // CRITICAL FIX: Convert DD.MM.YYYY to YYYY-MM-DD
         const datePart = item.match_date.split(' ')[0];
         if (datePart.includes('.')) {
           const [d, m, y] = datePart.split('.');
           dOnly = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
         } else {
-          dOnly = datePart; // fallback
+          dOnly = datePart; 
         }
       }
-      return {
-        ...item,
-        date_only: dOnly
-      };
+      return { ...item, date_only: dOnly };
     }).filter(r => r.date_only && r.match_id);
 
     insertManyFS(formattedRows);
-    console.log(`[LOCALDB] Successfully ingested ${formattedRows.length} Flashscore fixtures with corrected dates.`);
+    console.log(`[LOCALDB] SUCCESS! Ingested ${formattedRows.length} Flashscore fixtures.`);
   } catch(e) {
     console.error('[LOCALDB] Apify sync failed:', e.message);
+    throw e;
   }
 }
 
@@ -243,11 +265,7 @@ function getTeamStats(teamName, league) {
 }
 
 async function init() {
-  // CRITICAL FIX: I have removed the "if" condition temporarily.
-  // This forces the app to immediately fetch the new corrected dates from Apify
-  // the moment the server boots up, ensuring your fixtures load right away.
   refresh().catch(e => console.error('[LOCALDB] Initial forced refresh failed:', e));
-  
   setInterval(() => refresh().catch(() => {}), 12 * 60 * 60 * 1000);
 }
 
