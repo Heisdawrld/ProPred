@@ -1,4 +1,3 @@
-
 'use strict';
 
 const fs    = require('fs');
@@ -207,11 +206,34 @@ async function refresh() {
 
 // ── Fuzzy team name match ──────────────────────────────────────────────────
 function fuzzyMatch(query, candidate) {
-  const q = norm(query), c = norm(candidate);
-  if (q === c) return true;
-  const qw = q.split(' ').filter(w => w.length > 2);
-  const cw = c.split(' ').filter(w => w.length > 2);
-  return qw.some(w => cw.some(cword => cword.startsWith(w) || w.startsWith(cword)));
+  const na = norm(query), nb = norm(candidate);
+  if (na === nb) return true;
+  if ((na.includes(nb) && nb.length > 3) || (nb.includes(na) && na.length > 3)) return true;
+
+  const generic = ['united', 'city', 'fc', 'afc', 'rovers', 'athletic', 'real', 'cf', 'cd', 'sporting', 'club', 'de'];
+  const strip = s => s.split(' ').filter(w => w.length > 2 && !generic.includes(w)).join(' ');
+
+  const ca = strip(na);
+  const cb = strip(nb);
+
+  if (!ca || !cb) return false;
+  if (ca === cb) return true;
+  if (ca.includes(cb) || cb.includes(ca)) return true;
+
+  const w1 = ca.split(' ')[0];
+  const w2 = cb.split(' ')[0];
+  if (w1 === w2) return true;
+
+  const aliases = [
+    ['manchester', 'man'], ['nottingham', 'nottm'], 
+    ['wolverhampton', 'wolves'], ['sheffield', 'sheff'], ['tottenham', 'spurs']
+  ];
+  for (const [full, abbr] of aliases) {
+    if ((w1 === full && w2 === abbr) || (w2 === full && w1 === abbr)) return true;
+  }
+
+  if (w1.length >= 5 && w2.length >= 5 && (w1.startsWith(w2) || w2.startsWith(w1))) return true;
+  return false;
 }
 
 function getLeagueTeams(league) {
