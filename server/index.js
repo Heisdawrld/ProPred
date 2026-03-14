@@ -488,62 +488,101 @@ async function analyseWithAI(fixture, formData) {
 
   const { homeTeam, awayTeam, league, odds } = fixture;
   const { homeForm = [], awayForm = [], h2h = [] } = formData || {};
-
   const isBlind = !homeForm.length && !awayForm.length;
 
-  const fmtForm = form => form.slice(0, 5).map(f =>
-    `${f.result} (${f.isHome ? 'vs' : '@'} ${f.isHome ? f.awayTeam : f.homeTeam} ${f.homeGoals}-${f.awayGoals})`
-  ).join(', ') || 'No data';
+  // ── Split home/away form properly ─────────────────────────────────────
+  const homeOnlyForm  = homeForm.filter(f => f.isHome);   // home team's HOME games
+  const homeAwayForm  = homeForm.filter(f => !f.isHome);  // home team's AWAY games
+  const awayHomeForm  = awayForm.filter(f => f.isHome);   // away team's HOME games
+  const awayOnlyForm  = awayForm.filter(f => !f.isHome);  // away team's AWAY games
 
-  const fmtH2H = h2h.slice(0, 5).map(g =>
-    `${g.homeTeam} ${g.homeGoals}-${g.awayGoals} ${g.awayTeam}`
-  ).join(' | ') || 'No data';
+  // ── Stats helpers ──────────────────────────────────────────────────────
+  const wins    = arr => arr.filter(f => f.result === 'W').length;
+  const draws   = arr => arr.filter(f => f.result === 'D').length;
+  const losses  = arr => arr.filter(f => f.result === 'L').length;
+  const scored  = (arr, isH) => arr.length ? (arr.reduce((s,f) => s + (isH ? f.homeGoals : f.awayGoals), 0) / arr.length).toFixed(2) : '?';
+  const conceded= (arr, isH) => arr.length ? (arr.reduce((s,f) => s + (isH ? f.awayGoals : f.homeGoals), 0) / arr.length).toFixed(2) : '?';
+  const bttsArr = arr => arr.length ? Math.round(arr.filter(f => f.homeGoals > 0 && f.awayGoals > 0).length / arr.length * 100) : 0;
+  const o25Arr  = arr => arr.length ? Math.round(arr.filter(f => f.homeGoals + f.awayGoals > 2).length / arr.length * 100) : 0;
+  const o15Arr  = arr => arr.length ? Math.round(arr.filter(f => f.homeGoals + f.awayGoals > 1).length / arr.length * 100) : 0;
+  const fmtResults = arr => arr.slice(0,6).map(f => `${f.result}(${f.homeGoals}-${f.awayGoals} vs ${f.isHome ? f.awayTeam : f.homeTeam})`).join(', ') || 'No data';
 
-  const oddsBlk = odds
-    ? `Odds: Home=${odds.home?.toFixed(2)||'—'} Draw=${odds.draw?.toFixed(2)||'—'} Away=${odds.away?.toFixed(2)||'—'} O2.5=${odds.over25?.toFixed(2)||'—'} BTTS=${odds.bttsYes?.toFixed(2)||'—'}`
-    : 'No odds available';
-
-  const statsBlk = homeForm.length
-    ? (() => {
-        const avgGoals = arr => arr.length ? (arr.reduce((s, f) => s + (f.homeGoals + f.awayGoals), 0) / arr.length).toFixed(1) : '?';
-        const winRate  = (arr, team) => arr.length ? Math.round(arr.filter(f => f.result === 'W').length / arr.length * 100) + '%' : '?';
-        return `${homeTeam} last ${homeForm.length}: ${winRate(homeForm)} wins, avg ${avgGoals(homeForm)} goals/g | ${awayTeam} last ${awayForm.length}: ${winRate(awayForm)} wins, avg ${avgGoals(awayForm)} goals/g`;
-      })()
-    : '';
-
-  // Team goal stats from localdb
+  // ── Build rich stats block ─────────────────────────────────────────────
   const localStatsHome = localdb.getTeamStats(homeTeam, league);
   const localStatsAway = localdb.getTeamStats(awayTeam, league);
-  const localStatsBlk = (localStatsHome && localStatsAway)
-    ? ` SEASON STATS (${localStatsHome.n} matches): ${homeTeam}: ${localStatsHome.avgScored} goals/g scored | ${localStatsHome.avgConceded} conceded | ${localStatsHome.avgShots} shots/g | ${localStatsHome.avgShotsT} on target | BTTS ${localStatsHome.bttsRate}% | O2.5 ${localStatsHome.over25Rate}% ${awayTeam}: ${localStatsAway.avgScored} goals/g scored | ${localStatsAway.avgConceded} conceded | ${localStatsAway.avgShots} shots/g | ${localStatsAway.avgShotsT} on target | BTTS ${localStatsAway.bttsRate}% | O2.5 ${localStatsAway.over25Rate}%`
-    : '';
 
-  const prompt = `Match: ${homeTeam} vs ${awayTeam} | League: ${league}
+  const homeStatsBlk = `
+${homeTeam} HOME form (${homeOnlyForm.length} games): ${fmtResults(homeOnlyForm)}
+  W${wins(homeOnlyForm)} D${draws(homeOnlyForm)} L${losses(homeOnlyForm)} | Scored: ${scored(homeOnlyForm, true)}/g | Conceded: ${conceded(homeOnlyForm, true)}/g | BTTS: ${bttsArr(homeOnlyForm)}% | O2.5: ${o25Arr(homeOnlyForm)}%
+${homeTeam} AWAY form (${homeAwayForm.length} games): ${fmtResults(homeAwayForm)}
+  W${wins(homeAwayForm)} D${draws(homeAwayForm)} L${losses(homeAwayForm)} | Scored: ${scored(homeAwayForm, false)}/g | Conceded: ${conceded(homeAwayForm, false)}/g | BTTS: ${bttsArr(homeAwayForm)}% | O2.5: ${o25Arr(homeAwayForm)}%`;
+
+  const awayStatsBlk = `
+${awayTeam} HOME form (${awayHomeForm.length} games): ${fmtResults(awayHomeForm)}
+  W${wins(awayHomeForm)} D${draws(awayHomeForm)} L${losses(awayHomeForm)} | Scored: ${scored(awayHomeForm, true)}/g | Conceded: ${conceded(awayHomeForm, true)}/g | BTTS: ${bttsArr(awayHomeForm)}% | O2.5: ${o25Arr(awayHomeForm)}%
+${awayTeam} AWAY form (${awayOnlyForm.length} games): ${fmtResults(awayOnlyForm)}
+  W${wins(awayOnlyForm)} D${draws(awayOnlyForm)} L${losses(awayOnlyForm)} | Scored: ${scored(awayOnlyForm, false)}/g | Conceded: ${conceded(awayOnlyForm, false)}/g | BTTS: ${bttsArr(awayOnlyForm)}% | O2.5: ${o25Arr(awayOnlyForm)}%`;
+
+  const seasonStatsBlk = (localStatsHome && localStatsAway) ? `
+SEASON AVERAGES (all games):
+${homeTeam}: scored ${localStatsHome.avgScored}/g | conceded ${localStatsHome.avgConceded}/g | shots ${localStatsHome.avgShots}/g | on target ${localStatsHome.avgShotsT}/g | BTTS ${localStatsHome.bttsRate}% | O2.5 ${localStatsHome.over25Rate}%
+${awayTeam}: scored ${localStatsAway.avgScored}/g | conceded ${localStatsAway.avgConceded}/g | shots ${localStatsAway.avgShots}/g | on target ${localStatsAway.avgShotsT}/g | BTTS ${localStatsAway.bttsRate}% | O2.5 ${localStatsAway.over25Rate}%` : '';
+
+  const h2hBlk = h2h.length
+    ? `H2H last ${Math.min(h2h.length,5)}: ` + h2h.slice(0,5).map(g => `${g.homeTeam} ${g.homeGoals}-${g.awayGoals} ${g.awayTeam}`).join(' | ')
+    : 'H2H: No data';
+
+  // ── Odds block with implied probabilities ──────────────────────────────
+  const imp = v => v && v > 1 ? Math.round(100/v) + '%' : '—';
+  const oddsBlk = odds ? `
+AVAILABLE ODDS & IMPLIED PROBABILITIES:
+Home Win: ${odds.home?.toFixed(2)||'—'} (${imp(odds.home)}) | Draw: ${odds.draw?.toFixed(2)||'—'} (${imp(odds.draw)}) | Away Win: ${odds.away?.toFixed(2)||'—'} (${imp(odds.away)})
+Over 1.5: ${odds.over15?.toFixed(2)||'—'} (${imp(odds.over15)}) | Under 1.5: ${odds.under15?.toFixed(2)||'—'} (${imp(odds.under15)})
+Over 2.5: ${odds.over25?.toFixed(2)||'—'} (${imp(odds.over25)}) | Under 2.5: ${odds.under25?.toFixed(2)||'—'} (${imp(odds.under25)})
+Over 3.5: ${odds.over35?.toFixed(2)||'—'} (${imp(odds.over35)}) | Under 3.5: ${odds.under35?.toFixed(2)||'—'} (${imp(odds.under35)})
+BTTS Yes: ${odds.bttsYes?.toFixed(2)||'—'} (${imp(odds.bttsYes)}) | BTTS No: ${odds.bttsNo?.toFixed(2)||'—'} (${imp(odds.bttsNo)})
+DC Home/Draw: ${odds.dc1X?.toFixed(2)||'—'} (${imp(odds.dc1X)}) | DC Away/Draw: ${odds.dcX2?.toFixed(2)||'—'} (${imp(odds.dcX2)})
+DNB Home: ${odds.dnbHome?.toFixed(2)||'—'} (${imp(odds.dnbHome)}) | DNB Away: ${odds.dnbAway?.toFixed(2)||'—'} (${imp(odds.dnbAway)})` 
+    : 'ODDS: Not available — give AI pick only';
+
+  const prompt = `You are a sharp football betting analyst. Analyse this match like a professional punter who understands value, momentum, and market inefficiencies.
+
+MATCH: ${homeTeam} vs ${awayTeam} (${homeTeam} is HOME)
+LEAGUE: ${league}
 ${oddsBlk}
-${homeTeam} form: ${fmtForm(homeForm)}
-${awayTeam} form: ${fmtForm(awayForm)}
-H2H: ${fmtH2H}
-${statsBlk}${localStatsBlk}
-${isBlind ? 'NOTE: No live form data found. Use your training knowledge to estimate.' : ''}
+${homeStatsBlk}
+${awayStatsBlk}
+${seasonStatsBlk}
+${h2hBlk}
+${isBlind ? 'WARNING: No form data available. Use general knowledge but mark as speculative.' : ''}
 
-Analyse this match and respond in this exact JSON format:
+INSTRUCTIONS:
+1. Analyse home performance vs away performance separately — this is critical
+2. Look at BTTS%, Over/Under rates, goals scored/conceded to find the best market
+3. Consider all available markets: Home Win, Away Win, Draw, Over/Under 1.5/2.5/3.5, BTTS Yes/No, Double Chance, Draw No Bet
+4. Only pick a market where your probability EXCEEDS the bookmaker implied probability by at least 5%
+5. If odds are unavailable, still give your best pick based on data
+6. Do NOT default to home win just because they are at home — follow the data
+7. Pick the single best value bet across ALL markets, not just the match result
+
+Respond ONLY in this exact JSON format:
 {
-  "analysis": "2-3 sentence professional match analysis covering key factors",
-  "reasoning": "1 sentence on why your pick has value vs the market",
-  "tip": "Your recommended bet (e.g. 'Manchester City Win', 'Over 2.5 Goals', 'BTTS Yes', 'Draw No Bet Home')",
-  "market": "h2h|totals|btts|dnb|asian_handicap|double_chance",
-  "confidence": 55,
+  "analysis": "3 sentences: (1) home team strength/weakness at home, (2) away team strength/weakness on the road, (3) key matchup factor that drives your pick",
+  "reasoning": "1 sentence explaining why your pick has value — reference specific stats or odds",
+  "tip": "exact pick e.g. 'Over 2.5 Goals' or 'Chelsea Win' or 'BTTS Yes' or 'Draw No Bet - Arsenal' or 'Double Chance - Newcastle or Draw'",
+  "market": "h2h|totals|btts|dnb|double_chance",
+  "confidence": 62,
   "risk": "low|medium|high",
   "probs": {
-    "home_win": 55, "draw": 25, "away_win": 20,
-    "over15": 80, "under15": 20,
-    "over25": 55, "under25": 45,
-    "over35": 30, "under35": 70,
-    "over45": 12,
-    "btts_yes": 48, "btts_no": 52,
-    "dc_home_draw": 70, "dc_away_draw": 45,
-    "dnb_home": 68, "dnb_away": 40,
-    "ah_home": 58, "ah_away": 42
+    "home_win": 45, "draw": 28, "away_win": 27,
+    "over15": 82, "under15": 18,
+    "over25": 58, "under25": 42,
+    "over35": 32, "under35": 68,
+    "over45": 14,
+    "btts_yes": 55, "btts_no": 45,
+    "dc_home_draw": 73, "dc_away_draw": 55,
+    "dnb_home": 62, "dnb_away": 40,
+    "ah_home": 52, "ah_away": 48
   }
 }`;
 
@@ -552,16 +591,16 @@ Analyse this match and respond in this exact JSON format:
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
       body: JSON.stringify({
-        model: 'llama-3.1-8b-instant',
+        model: 'llama-3.3-70b-versatile',
         messages: [
-          { role: 'system', content: 'You are a professional football betting analyst. You study form, odds, and market value. Respond ONLY with valid JSON, no markdown, no preamble.' },
+          { role: 'system', content: 'You are a sharp football betting analyst. You think like a professional punter — you look for value across all markets, not just match results. You understand home/away performance differences, goals trends, and when to back unders vs overs. Respond ONLY with valid JSON, no markdown, no preamble.' },
           { role: 'user', content: prompt },
         ],
         response_format: { type: 'json_object' },
-        max_tokens: 800,
-        temperature: 0.3,
+        max_tokens: 1000,
+        temperature: 0.2,
       }),
-      timeout: 15000,
+      timeout: 20000,
     });
     if (!res.ok) { console.error('[AI] Groq error:', res.status); return null; }
     const data = await res.json();
@@ -575,56 +614,57 @@ Analyse this match and respond in this exact JSON format:
 
 // ─── COMPUTE VALUE ────────────────────────────────────────────────────────
 function computeValue(ai, odds) {
-  if (!ai || !odds) return { has_value: false, best_odds: null, implied_prob: null, edge_pct: null, model_prob: null };
+  if (!ai) return { has_value: false, best_odds: null, implied_prob: null, edge_pct: null, model_prob: null };
 
   const tipL = (ai.tip || '').toLowerCase();
-  let best_odds = null, market_key = null;
+  const p = ai.probs || {};
+  const o = odds || {};
 
-  if (tipL.includes('draw')) { best_odds = odds.draw; market_key = 'draw'; }
-  else if (tipL.includes('over 4.5')) { best_odds = odds.over45; }
-  else if (tipL.includes('over 3.5')) { best_odds = odds.over35; }
-  else if (tipL.includes('over 2.5')) { best_odds = odds.over25; }
-  else if (tipL.includes('under 2.5')) { best_odds = odds.under25; }
-  else if (tipL.includes('over 1.5')) { best_odds = odds.over15; }
-  else if (tipL.includes('under 1.5')) { best_odds = odds.under15; }
-  else if (tipL.includes('btts') && tipL.includes('yes')) { best_odds = odds.bttsYes; }
-  else if (tipL.includes('btts') && tipL.includes('no'))  { best_odds = odds.bttsNo; }
-  else if (tipL.includes('1x') || (tipL.includes('or draw') && tipL.includes('home'))) { best_odds = odds.dc1X; }
-  else if (tipL.includes('x2') || (tipL.includes('or draw') && tipL.includes('away'))) { best_odds = odds.dcX2; }
-  else if (tipL.includes('dnb') || tipL.includes('draw no bet')) {
-    best_odds = tipL.includes('away') ? odds.dnbAway : odds.dnbHome;
+  let best_odds = null;
+  let model_prob = ai.confidence || 55;
+
+  // Match tip to correct odds and model probability
+  if (tipL.includes('over 4.5'))                          { best_odds = o.over45;   model_prob = p.over45   || model_prob; }
+  else if (tipL.includes('under 4.5'))                    { best_odds = o.under45;  model_prob = 100 - (p.over45||0) || model_prob; }
+  else if (tipL.includes('over 3.5'))                     { best_odds = o.over35;   model_prob = p.over35   || model_prob; }
+  else if (tipL.includes('under 3.5'))                    { best_odds = o.under35;  model_prob = p.under35  || model_prob; }
+  else if (tipL.includes('over 2.5'))                     { best_odds = o.over25;   model_prob = p.over25   || model_prob; }
+  else if (tipL.includes('under 2.5'))                    { best_odds = o.under25;  model_prob = p.under25  || model_prob; }
+  else if (tipL.includes('over 1.5'))                     { best_odds = o.over15;   model_prob = p.over15   || model_prob; }
+  else if (tipL.includes('under 1.5'))                    { best_odds = o.under15;  model_prob = p.under15  || model_prob; }
+  else if (tipL.includes('btts') && tipL.includes('no'))  { best_odds = o.bttsNo;   model_prob = p.btts_no  || model_prob; }
+  else if (tipL.includes('btts'))                         { best_odds = o.bttsYes;  model_prob = p.btts_yes || model_prob; }
+  else if (tipL.includes('draw no bet') || tipL.includes('dnb')) {
+    if (tipL.includes('away')) { best_odds = o.dnbAway; model_prob = p.dnb_away || model_prob; }
+    else                       { best_odds = o.dnbHome; model_prob = p.dnb_home || model_prob; }
   }
-  else if (tipL.includes('asian')) {
-    best_odds = tipL.includes('away') ? odds.ahAway : odds.ahHome;
+  else if (tipL.includes('double chance') || tipL.includes('or draw')) {
+    if (tipL.includes('away')) { best_odds = o.dcX2; model_prob = p.dc_away_draw || model_prob; }
+    else                       { best_odds = o.dc1X; model_prob = p.dc_home_draw || model_prob; }
+  }
+  else if (tipL === 'draw' || tipL.endsWith(' draw')) {
+    best_odds = o.draw; model_prob = p.draw || model_prob;
   }
   else {
-    // Result tip — home or away
-    const words = tipL.split(' ').filter(w => w.length > 3);
-    // If no draw/away keywords matched, assume home if win is mentioned
-    best_odds = odds.home; // default
-    if (tipL.includes('away') || (!tipL.includes('home') && !tipL.includes('win'))) {
-      // Check if tip text looks more like away
-    }
-    // Better: check if tip contains away team fragment
-    market_key = 'h2h';
+    // Result market — figure out home vs away from tip text
+    const awayName = (ai.away_team || '').toLowerCase();
+    const homeName = (ai.home_team || '').toLowerCase();
+    const awayWords = awayName.split(' ').filter(w => w.length > 3);
+    const homeWords = homeName.split(' ').filter(w => w.length > 3);
+    const isAwayTip = awayWords.some(w => tipL.includes(w));
+    const isHomeTip = homeWords.some(w => tipL.includes(w)) || tipL.includes('home');
+    if (isAwayTip && !isHomeTip) { best_odds = o.away; model_prob = p.away_win || model_prob; }
+    else                          { best_odds = o.home; model_prob = p.home_win || model_prob; }
   }
 
-  if (!best_odds || best_odds <= 1) return { has_value: false, best_odds: null, implied_prob: null, edge_pct: null, model_prob: null };
+  if (!best_odds || best_odds <= 1) {
+    // No odds available but we still have a tip — mark as no_odds_tip
+    return { has_value: false, best_odds: null, implied_prob: null, edge_pct: null, model_prob };
+  }
 
   const implied_prob = Math.round(100 / best_odds);
-  // Determine model prob from probs object
-  const p = ai.probs || {};
-  let model_prob = ai.confidence || 55;
-  if (tipL.includes('draw')) model_prob = p.draw || model_prob;
-  else if (tipL.includes('over 2.5')) model_prob = p.over25 || model_prob;
-  else if (tipL.includes('under 2.5')) model_prob = p.under25 || model_prob;
-  else if (tipL.includes('over 1.5')) model_prob = p.over15 || model_prob;
-  else if (tipL.includes('btts') && tipL.includes('yes')) model_prob = p.btts_yes || model_prob;
-  else if (tipL.includes('btts') && tipL.includes('no'))  model_prob = p.btts_no  || model_prob;
-  else model_prob = p.home_win || model_prob;
-
   const edge_pct = Math.round(model_prob - implied_prob);
-  const has_value = edge_pct >= 3;
+  const has_value = edge_pct >= 4;
 
   return { has_value, best_odds, implied_prob, edge_pct, model_prob };
 }
