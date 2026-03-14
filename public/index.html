@@ -8,8 +8,10 @@
 <style>
 :root { --bg: #08080f; --bg2: #0d0d1a; --card: #14142a; --border: #1f1f40; --accent: #5b6ef5; --text: #f0f0ff; --gold: #ffcf40; --dim: #5a5a8a; }
 body { background: var(--bg); color: var(--text); font-family: 'Inter', sans-serif; margin: 0; padding-bottom: 60px; }
-nav { background: var(--card); padding: 12px 15px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 100; }
+nav { background: var(--card); padding: 12px 15px; border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 100; }
 .logo { font-weight: 900; color: var(--accent); font-size: 1.1rem; }
+.search-box { padding: 10px; background: var(--bg); }
+#searchInput { width: 100%; background: var(--card); border: 1px solid var(--border); color: #fff; padding: 10px; border-radius: 6px; font-size: 0.85rem; }
 #fxList { display: flex; flex-direction: column; gap: 2px; padding: 5px; }
 .league-group { background: var(--bg2); margin-bottom: 4px; border-radius: 4px; overflow: hidden; border: 1px solid var(--border); }
 .league-header { background: var(--card); padding: 10px 15px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; border-left: 3px solid var(--accent); }
@@ -25,37 +27,47 @@ nav { background: var(--card); padding: 12px 15px; border-bottom: 1px solid var(
 </style>
 </head>
 <body>
-<nav><div class="logo">PROPRED PRO</div><button onclick="init()" style="background:none; border:none; color:var(--accent); font-weight:bold; cursor:pointer;">REFRESH</button></nav>
-<div id="fxList"><div class="loading">Fetching Scraped Matches...</div></div>
+<nav><div class="logo">PROPRED PRO</div></nav>
+<div class="search-box"><input type="text" id="searchInput" placeholder="Search teams or leagues..." oninput="render()"></div>
+<div id="fxList"><div class="loading">Fetching Matches...</div></div>
 <script>
 let allFx = [];
 const MAJORS = ['premier league', 'champions league', 'la liga', 'bundesliga', 'serie a', 'ligue 1'];
 
 async function init() {
-  const list = document.getElementById('fxList');
   try {
     const res = await fetch('/api/fixtures');
     const data = await res.json();
     allFx = data.fixtures || []; 
-    if (allFx.length === 0) { list.innerHTML = '<div class="loading">No matches found for today. Check Apify!</div>'; return; }
+    if (allFx.length === 0) { document.getElementById('fxList').innerHTML = '<div class="loading">No matches found.</div>'; return; }
     render();
-  } catch (e) { list.innerHTML = '<div class="loading">Server Connection Error</div>'; }
+  } catch (e) { document.getElementById('fxList').innerHTML = '<div class="loading">Server Error</div>'; }
 }
 
 function render() {
   const container = document.getElementById('fxList');
+  const query = document.getElementById('searchInput').value.toLowerCase();
   const groups = {};
-  allFx.forEach(f => {
+  
+  // Filter and Group
+  allFx.filter(f => 
+    (f.homeTeam || '').toLowerCase().includes(query) || 
+    (f.awayTeam || '').toLowerCase().includes(query) || 
+    (f.league || '').toLowerCase().includes(query)
+  ).forEach(f => {
     const lName = f.league || 'Other Leagues';
     if (!groups[lName]) groups[lName] = [];
     groups[lName].push(f);
   });
-  container.innerHTML = Object.keys(groups).sort((a, b) => {
+
+  const sortedLeagues = Object.keys(groups).sort((a, b) => {
     const aM = MAJORS.some(l => a.toLowerCase().includes(l));
     const bM = MAJORS.some(l => b.toLowerCase().includes(l));
     return bM - aM || a.localeCompare(b);
-  }).map(l => {
-    const isMajor = MAJORS.some(m => l.toLowerCase().includes(m));
+  });
+
+  container.innerHTML = sortedLeagues.map(l => {
+    const isMajor = MAJORS.some(m => l.toLowerCase().includes(m)) || query.length > 0;
     return `
     <div class="league-group ${isMajor ? '' : 'collapsed'}">
       <div class="league-header" onclick="this.parentElement.classList.toggle('collapsed')">
@@ -64,18 +76,16 @@ function render() {
       </div>
       <div class="league-matches">
         ${groups[l].map(f => {
-          const home = f.homeTeam || 'Unknown';
-          const away = f.awayTeam || 'Unknown';
+          const score = (f.homeGoals !== null) ? \`\${f.homeGoals}-\${f.awayGoals}\` : 'v';
           const time = f.date ? f.date.split(' ')[1] || 'TBD' : 'TBD';
-          const score = (f.homeGoals !== null) ? `${f.homeGoals}-${f.awayGoals}` : 'v';
-          return `
-          <div class="fs-row" onclick="alert('Analysis for ${home} coming soon!')">
-            <div class="fs-time">${time}</div>
-            <div class="fs-team home">${home}</div>
-            <div class="fs-score">${score}</div>
-            <div class="fs-team away">${away}</div>
+          return \`
+          <div class="fs-row" onclick="alert('Analysis loading...')">
+            <div class="fs-time">\${time}</div>
+            <div class="fs-team home">\${f.homeTeam}</div>
+            <div class="fs-score">\${score}</div>
+            <div class="fs-team away">\${f.awayTeam}</div>
             <div style="text-align:center; color:#222">☆</div>
-          </div>`;
+          </div>\`;
         }).join('')}
       </div>
     </div>`;
