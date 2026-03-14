@@ -591,7 +591,7 @@ Respond ONLY in this exact JSON format:
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: 'llama-3.1-8b-instant',
         messages: [
           { role: 'system', content: 'You are a sharp football betting analyst. You think like a professional punter — you look for value across all markets, not just match results. You understand home/away performance differences, goals trends, and when to back unders vs overs. Respond ONLY with valid JSON, no markdown, no preamble.' },
           { role: 'user', content: prompt },
