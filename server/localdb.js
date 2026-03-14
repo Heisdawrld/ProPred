@@ -232,6 +232,7 @@ function getLocalForm(homeTeamQuery, awayTeamQuery, league) {
     const getForm = teamName => ldb.prepare(`
       SELECT * FROM matches
       WHERE (home_team = ? OR away_team = ?) AND league = ? AND home_goals IS NOT NULL
+        AND season = '2526'
       ORDER BY date DESC LIMIT 8
     `).all(teamName, teamName, league).map(r => {
       const isHome = r.home_team === teamName;
