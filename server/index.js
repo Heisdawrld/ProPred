@@ -80,9 +80,9 @@ async function fetchOddsForLeague(league) {
   if (cached && Date.now() - cached.fetchedAt < ODDS_TTL) return cached.events;
 
   try {
-    const markets = 'h2h,totals,btts,double_chance';
+    const markets = 'h2h,totals';
     const res = await fetch(
-      `https://api.the-odds-api.com/v4/sports/${sportKey}/odds/?apiKey=${ODDS_API_KEY}&regions=uk&markets=${markets}&oddsFormat=decimal`,
+      `https://api.the-odds-api.com/v4/sports/${sportKey}/odds/?apiKey=${ODDS_API_KEY}&regions=uk,eu&markets=${markets}&oddsFormat=decimal`,
       { timeout: 8000 }
     );
     if (!res.ok) {
@@ -603,16 +603,21 @@ ${h2hBlk}
 ${isBlind ? 'WARNING: No form data available. Use general knowledge but mark as speculative.' : ''}
 
 INSTRUCTIONS:
-1. Analyse home performance vs away performance separately — this is the most important factor
-2. Scan ALL markets before deciding: 1X2, Over/Under 1.5/2.5/3.5/4.5, BTTS Yes/No, Double Chance, Draw No Bet
-3. Pick the market where your TRUE probability is highest vs the implied probability — not just the safest pick
-4. If a team scores 2+ goals in 80% of home games, Over 1.5 is lazy — consider Over 2.5 or Over 3.5
-5. If both teams score in 70%+ of games, BTTS Yes is often better value than a result pick
-6. If one team is dominant at home but you're unsure of a clean win, DNB or Double Chance may be smarter
-7. A straight Home Win or Away Win at good odds beats a watered-down Double Chance if the data supports it
-8. NEVER pick Over 1.5 if Over 2.5 is clearly justified by the data — pick the highest line the data supports
-9. If odds unavailable, still give best pick — mark as AI PICK
-10. Be intentional and decisive — punters want clear, confident picks with real reasoning
+1. Analyse home form vs away form separately — they are different signals
+2. Consider ALL these markets and pick the single best one:
+   - HOME WIN / AWAY WIN / DRAW
+   - OVER 1.5 / OVER 2.5 / OVER 3.5 / OVER 4.5 goals
+   - UNDER 1.5 / UNDER 2.5 / UNDER 3.5 goals
+   - BTTS YES / BTTS NO
+   - DOUBLE CHANCE (Home or Draw / Away or Draw)
+   - DRAW NO BET (Home / Away)
+3. Pick the line that data BEST supports — if Over 2.5 rate is 65% pick Over 2.5, if it's only 45% pick Over 1.5
+4. If a team is clearly dominant at home with strong defence, a straight Home Win may beat Double Chance value
+5. If both teams score consistently (BTTS 65%+), BTTS Yes may be the pick regardless of result
+6. Low-scoring teams with under 1.5 goals in most matches → Under 2.5 or Under 1.5 could be the pick
+7. A team winning 70%+ of away games → Away Win straight up is valid
+8. Be intentional — follow what the stats show, not what feels safe
+9. If odds unavailable, still give best pick based on data alone
 
 Respond ONLY in this exact JSON format:
 {
