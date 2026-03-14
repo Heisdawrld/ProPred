@@ -20,11 +20,11 @@ const ODDS_API_KEY     = (process.env.ODDS_API_KEY     || '').trim();
 const GROQ_KEY         = (process.env.GROQ_KEY         || '').trim();
 const FDORG_KEY        = (process.env.FDORG_KEY        || '').trim();
 
-const VERSION = '3.1.1'; // Bumped version for tracking
+const VERSION = '3.1.0';
 
 // ─── IN-MEMORY FIXTURE CACHE ──────────────────────────────────────────────
-let fixtureCache = {};   
-const FIXTURE_TTL = 30 * 60 * 1000; 
+let fixtureCache = {};   // date → { fixtures, fetchedAt }
+const FIXTURE_TTL = 30 * 60 * 1000; // 30 min
 
 // ─── UTILS ────────────────────────────────────────────────────────────────
 const today = () => new Date().toISOString().split('T')[0];
@@ -36,34 +36,9 @@ function norm(name) {
 function fuzzyTeam(a, b) {
   const na = norm(a), nb = norm(b);
   if (na === nb) return true;
-  
-  if ((na.includes(nb) && nb.length > 3) || (nb.includes(na) && na.length > 3)) return true;
-
-  const generic = ['united', 'city', 'fc', 'afc', 'rovers', 'athletic', 'real', 'cf', 'cd', 'sporting', 'club', 'de'];
-  const strip = s => s.split(' ').filter(w => w.length > 2 && !generic.includes(w)).join(' ');
-
-  const ca = strip(na);
-  const cb = strip(nb);
-
-  if (!ca || !cb) return false;
-  if (ca === cb) return true;
-  if (ca.includes(cb) || cb.includes(ca)) return true;
-
-  const w1 = ca.split(' ')[0];
-  const w2 = cb.split(' ')[0];
-  if (w1 === w2) return true;
-
-  const aliases = [
-    ['manchester', 'man'], ['nottingham', 'nottm'], 
-    ['wolverhampton', 'wolves'], ['sheffield', 'sheff'], ['tottenham', 'spurs']
-  ];
-  for (const [full, abbr] of aliases) {
-    if ((w1 === full && w2 === abbr) || (w2 === full && w1 === abbr)) return true;
-  }
-
-  if (w1.length >= 5 && w2.length >= 5 && (w1.startsWith(w2) || w2.startsWith(w1))) return true;
-
-  return false;
+  const wa = na.split(' ').filter(w => w.length > 2);
+  const wb = nb.split(' ').filter(w => w.length > 2);
+  return wa.some(w => wb.some(x => x.startsWith(w) || w.startsWith(x)));
 }
 
 // ─── ODDS API ─────────────────────────────────────────────────────────────
@@ -124,7 +99,7 @@ async function fetchOdds(homeTeam, awayTeam) {
           }
         }
       }
-      break; 
+      break; // first bookmaker only
     }
     return Object.keys(result).length ? result : null;
   } catch(e) {
@@ -155,6 +130,7 @@ async function fetchFixturesFDOrg(date) {
   if (!FDORG_KEY) return [];
   try {
     const results = [];
+    // Fetch all competitions in parallel
     const fetches = Object.entries(FDORG_COMPS).map(async ([code, meta]) => {
       try {
         const res = await fetch(
@@ -239,6 +215,7 @@ async function fetchFixturesESPN(date) {
         const home = c1.homeAway === 'home' ? c1 : c2;
         const away = c1.homeAway === 'away' ? c1 : c2;
         const statusState = ev.status?.type?.state || 'pre';
+        const statusName  = ev.status?.type?.shortDetail || 'NS';
         let status = 'NS';
         if (statusState === 'post') status = 'FT';
         else if (statusState === 'in') status = '1H';
@@ -275,6 +252,7 @@ async function fetchAllFixtures(date) {
     fetchFixturesFDOrg(date),
     fetchFixturesESPN(date),
   ]);
+  // Deduplicate ESPN fixtures already covered by FDORG
   const fdorgLeagues = new Set(fdorg.map(f => f.league.toLowerCase()));
   const espnFiltered = espn.filter(f => !fdorgLeagues.has(f.league.toLowerCase()));
   return [...fdorg, ...espnFiltered];
@@ -284,6 +262,7 @@ async function fetchAllFixtures(date) {
 async function getFormFDOrg(homeTeam, awayTeam, league, fdorgMatchId) {
   if (!FDORG_KEY) return null;
   try {
+    // Try to get competition ID from league name
     const compRes = await fetch(
       `https://api.football-data.org/v4/competitions/?plan=TIER_ONE`,
       { headers: { 'X-Auth-Token': FDORG_KEY }, timeout: 5000 }
@@ -466,7 +445,7 @@ async function getFormESPN(homeTeam, awayTeam, homeId, awayId, slug) {
 async function getFormAndH2H(homeTeam, awayTeam, homeId, awayId, slug, league, fdorgMatchId) {
   console.log(`[FORM] ${homeTeam} vs ${awayTeam} | ${league}`);
 
-  // Tier 0: localdb
+  // Tier 0: localdb (football-data.co.uk CSVs — instant, no API call)
   try {
     const r = localdb.getLocalForm(homeTeam, awayTeam, league);
     if (r && (r.homeForm.length > 0 || r.awayForm.length > 0)) {
@@ -479,8 +458,11 @@ async function getFormAndH2H(homeTeam, awayTeam, homeId, awayId, slug, league, f
   if (FDORG_KEY) {
     try {
       const r = await getFormFDOrg(homeTeam, awayTeam, league, fdorgMatchId);
-      if (r && (r.homeForm.length > 0 || r.awayForm.length > 0)) return r;
-    } catch(e) {}
+      if (r && (r.homeForm.length > 0 || r.awayForm.length > 0)) {
+        console.log(`[FORM] FDORG ok: home=${r.homeForm.length} away=${r.awayForm.length}`);
+        return r;
+      }
+    } catch(e) { console.error('[FORM] FDORG err:', e.message); }
   }
 
   // Tier 2: API-Football
@@ -489,8 +471,11 @@ async function getFormAndH2H(homeTeam, awayTeam, homeId, awayId, slug, league, f
       getFormAPIFootball(homeTeam, awayTeam, league),
       new Promise(res => setTimeout(() => res(null), 8000)),
     ]);
-    if (r && (r.homeForm.length > 0 || r.awayForm.length > 0)) return r;
-  } catch(e) {}
+    if (r && (r.homeForm.length > 0 || r.awayForm.length > 0)) {
+      console.log(`[FORM] API-Football ok: home=${r.homeForm.length} away=${r.awayForm.length}`);
+      return r;
+    }
+  } catch(e) { console.error('[FORM] API-Football err:', e.message); }
 
   // Tier 3: ESPN
   console.log(`[FORM] ESPN fallback for ${league}`);
@@ -526,15 +511,9 @@ async function analyseWithAI(fixture, formData) {
       })()
     : '';
 
-  let localStatsHome = null;
-  let localStatsAway = null;
-  
-  // Safe check in case localdb is out of sync
-  if (localdb && typeof localdb.getTeamStats === 'function') {
-      localStatsHome = localdb.getTeamStats(homeTeam, league);
-      localStatsAway = localdb.getTeamStats(awayTeam, league);
-  }
-
+  // Team goal stats from localdb
+  const localStatsHome = localdb.getTeamStats(homeTeam, league);
+  const localStatsAway = localdb.getTeamStats(awayTeam, league);
   const localStatsBlk = (localStatsHome && localStatsAway)
     ? ` SEASON STATS (${localStatsHome.n} matches): ${homeTeam}: ${localStatsHome.avgScored} goals/g scored | ${localStatsHome.avgConceded} conceded | ${localStatsHome.avgShots} shots/g | ${localStatsHome.avgShotsT} on target | BTTS ${localStatsHome.bttsRate}% | O2.5 ${localStatsHome.over25Rate}% ${awayTeam}: ${localStatsAway.avgScored} goals/g scored | ${localStatsAway.avgConceded} conceded | ${localStatsAway.avgShots} shots/g | ${localStatsAway.avgShotsT} on target | BTTS ${localStatsAway.bttsRate}% | O2.5 ${localStatsAway.over25Rate}%`
     : '';
@@ -573,7 +552,7 @@ Analyse this match and respond in this exact JSON format:
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
       body: JSON.stringify({
-        model: 'llama-3.1-8b-instant', 
+        model: 'llama-3.3-70b-versatile',
         messages: [
           { role: 'system', content: 'You are a professional football betting analyst. You study form, odds, and market value. Respond ONLY with valid JSON, no markdown, no preamble.' },
           { role: 'user', content: prompt },
@@ -585,13 +564,8 @@ Analyse this match and respond in this exact JSON format:
       timeout: 15000,
     });
     if (!res.ok) { console.error('[AI] Groq error:', res.status); return null; }
-    
     const data = await res.json();
-    let text = data.choices?.[0]?.message?.content || '{}';
-    
-    // STRIP MARKDOWN BEFORE PARSING
-    text = text.replace(/```json/gi, '').replace(/```/g, '').trim();
-
+    const text = data.choices?.[0]?.message?.content || '{}';
     return { ...JSON.parse(text), is_blind: isBlind };
   } catch(e) {
     console.error('[AI]', e.message);
@@ -624,13 +598,21 @@ function computeValue(ai, odds) {
     best_odds = tipL.includes('away') ? odds.ahAway : odds.ahHome;
   }
   else {
-    best_odds = odds.home; 
+    // Result tip — home or away
+    const words = tipL.split(' ').filter(w => w.length > 3);
+    // If no draw/away keywords matched, assume home if win is mentioned
+    best_odds = odds.home; // default
+    if (tipL.includes('away') || (!tipL.includes('home') && !tipL.includes('win'))) {
+      // Check if tip text looks more like away
+    }
+    // Better: check if tip contains away team fragment
     market_key = 'h2h';
   }
 
   if (!best_odds || best_odds <= 1) return { has_value: false, best_odds: null, implied_prob: null, edge_pct: null, model_prob: null };
 
   const implied_prob = Math.round(100 / best_odds);
+  // Determine model prob from probs object
   const p = ai.probs || {};
   let model_prob = ai.confidence || 55;
   if (tipL.includes('draw')) model_prob = p.draw || model_prob;
@@ -654,8 +636,9 @@ async function loadFixtures(date) {
 
   console.log(`[FIXTURES] Fetching ${date}…`);
   const fixtures = await fetchAllFixtures(date);
-  console.log(`[FIXTURES] Got ${fixtures.length} fixtures`);
+  console.log(`[FIXTURES] Got ${fixtures.length} fixtures (FDORG + ESPN)`);
 
+  // Enrich with odds sequentially to avoid rate limits
   const enriched = [];
   for (const f of fixtures) {
     try {
@@ -672,20 +655,24 @@ async function loadFixtures(date) {
 
 // ─── ROUTES ───────────────────────────────────────────────────────────────
 
+// GET /api/fixtures?date=YYYY-MM-DD
 app.get('/api/fixtures', async (req, res) => {
   try {
     const date = req.query.date || today();
     const fixtures = await loadFixtures(date);
     res.json({ fixtures, date });
   } catch(e) {
+    console.error('[GET /api/fixtures]', e.message);
     res.status(500).json({ error: e.message });
   }
 });
 
+// GET /api/match/:id
 app.get('/api/match/:id', async (req, res) => {
   try {
     const id = req.params.id;
 
+    // Check analysis cache first
     const cached = db.getCachedAnalysis(id);
     if (cached) {
       let h2h = [], homeForm = [], awayForm = [], probs = {};
@@ -707,12 +694,14 @@ app.get('/api/match/:id', async (req, res) => {
       });
     }
 
+    // Find fixture in cache
     let fixture = null;
     for (const d of Object.keys(fixtureCache)) {
       fixture = fixtureCache[d].fixtures.find(f => String(f.id) === String(id));
       if (fixture) break;
     }
 
+    // If not in cache, try fetching from FDORG directly by match id
     if (!fixture) {
       if (FDORG_KEY && id.startsWith && !id.toString().startsWith('espn-')) {
         try {
@@ -743,12 +732,14 @@ app.get('/api/match/:id', async (req, res) => {
       if (!fixture) return res.status(404).json({ error: 'Fixture not found' });
     }
 
+    // Fetch form data
     const formData = await getFormAndH2H(
       fixture.homeTeam, fixture.awayTeam,
       fixture.homeId, fixture.awayId,
       fixture.slug, fixture.league, fixture.fdorgMatchId
     );
 
+    // Run AI analysis
     const ai = await analyseWithAI(fixture, formData);
     const value = computeValue(ai, fixture.odds);
 
@@ -776,6 +767,7 @@ app.get('/api/match/:id', async (req, res) => {
       no_odds_tip: !!(ai?.tip && !value.best_odds),
     };
 
+    // Cache the analysis
     if (ai?.analysis) {
       db.cacheAnalysis({
         fixture_id:   id,
@@ -806,6 +798,7 @@ app.get('/api/match/:id', async (req, res) => {
   }
 });
 
+// POST /api/bet
 app.post('/api/bet', async (req, res) => {
   try {
     const bet = req.body;
@@ -814,10 +807,12 @@ app.post('/api/bet', async (req, res) => {
     if (!result) return res.json({ ok: false, reason: 'Insufficient bankroll or zero Kelly stake' });
     res.json({ ok: true, bet: result });
   } catch(e) {
+    console.error('[POST /api/bet]', e.message);
     res.status(500).json({ ok: false, reason: e.message });
   }
 });
 
+// GET /api/bets
 app.get('/api/bets', (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
@@ -826,12 +821,14 @@ app.get('/api/bets', (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /api/portfolio
 app.get('/api/portfolio', (req, res) => {
   try {
     res.json(db.getStats());
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// POST /api/settle
 app.post('/api/settle', async (req, res) => {
   try {
     const pending = db.getBets({ pending: true });
@@ -850,12 +847,13 @@ app.post('/api/settle', async (req, res) => {
         if (hg == null || ag == null) continue;
         const n = db.settleBet(bet.fixture_id, hg, ag);
         settled += n;
-      } catch(e) {}
+      } catch(e) { console.error('[SETTLE]', e.message); }
     }
     res.json({ settled });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// POST /api/bankroll/reset
 app.post('/api/bankroll/reset', (req, res) => {
   try {
     const amount = parseFloat(req.body.amount) || 1000;
@@ -864,6 +862,7 @@ app.post('/api/bankroll/reset', (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /api/status
 app.get('/api/status', (req, res) => {
   try {
     const stats = db.getStats();
@@ -877,25 +876,27 @@ app.get('/api/status', (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /api/bsd-predictions
 app.get('/api/bsd-predictions', async (req, res) => {
   try {
     if (!process.env.BSD_API_KEY) return res.json({ ok: false, error: 'BSD_API_KEY not set', predictions: [] });
     const predictions = await bsd.getPredictions();
     res.json({ ok: true, predictions });
   } catch(e) {
+    console.error('[BSD-PREDICTIONS]', e.message);
     res.status(500).json({ ok: false, error: e.message, predictions: [] });
   }
 });
 
+// POST /api/bsd-predictions/refresh
 app.post('/api/bsd-predictions/refresh', async (req, res) => {
   try {
-    if (bsd && typeof bsd.updateCache === 'function') {
-      bsd.updateCache();
-    }
+    bsd.updateCache(); // fire and forget
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// Catch-all: serve frontend
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../public/index.html'));
 });
@@ -906,20 +907,12 @@ app.listen(PORT, async () => {
   try {
     await loadFixtures(today());
     console.log('[PROPRED] Today\'s fixtures loaded');
-  } catch(e) {}
+  } catch(e) { console.error('[PROPRED] fixture preload failed:', e.message); }
 
-  // BULLETPROOF CHECK: Prevents crash if localdb.js is out of sync
-  if (localdb && typeof localdb.init === 'function') {
-    localdb.init();
-  } else {
-    console.warn('[PROPRED] Warning: localdb.init is missing. Your localdb.js file is outdated on Render.');
-  }
+  localdb.init(); // non-blocking — downloads CSVs in background
 
-  // BULLETPROOF CHECK: Prevents crash if bsd.js is out of sync
   if (process.env.BSD_API_KEY) {
-    if (bsd && typeof bsd.scheduleRefresh === 'function') {
-      bsd.scheduleRefresh();
-      console.log('[PROPRED] BSD predictions scheduled');
-    }
+    bsd.scheduleRefresh();
+    console.log('[PROPRED] BSD predictions scheduled');
   }
 });
