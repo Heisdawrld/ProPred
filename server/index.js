@@ -923,6 +923,21 @@ app.get('/api/debug/db', (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+
+// POST /api/debug/clear-cache
+app.post('/api/debug/clear-cache', (req, res) => {
+  try {
+    const Database = require('better-sqlite3');
+    const path = require('path');
+    const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../data');
+    const mdb = new Database(path.join(DATA_DIR, 'propred.db'));
+    const result = mdb.prepare('DELETE FROM analysis_cache').run();
+    mdb.close();
+    fixtureCache = {}; // clear in-memory fixture cache too
+    res.json({ ok: true, deleted: result.changes });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // Catch-all: serve frontend
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../public/index.html'));
