@@ -33,18 +33,12 @@ function norm(name) {
   return (name || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
 }
 
-function norm(name) {
-  return (name || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
-}
-
 function fuzzyTeam(a, b) {
   const na = norm(a), nb = norm(b);
   if (na === nb) return true;
   
-  // Protect against substring matching breaking on tiny words
   if ((na.includes(nb) && nb.length > 3) || (nb.includes(na) && na.length > 3)) return true;
 
-  // Remove meaningless filler words to compare the actual club identity
   const generic = ['united', 'city', 'fc', 'afc', 'rovers', 'athletic', 'real', 'cf', 'cd', 'sporting', 'club', 'de'];
   const strip = s => s.split(' ').filter(w => w.length > 2 && !generic.includes(w)).join(' ');
 
@@ -55,12 +49,10 @@ function fuzzyTeam(a, b) {
   if (ca === cb) return true;
   if (ca.includes(cb) || cb.includes(ca)) return true;
 
-  // Check primary identifiers
   const w1 = ca.split(' ')[0];
   const w2 = cb.split(' ')[0];
   if (w1 === w2) return true;
 
-  // Hardcode known English football aliases
   const aliases = [
     ['manchester', 'man'], ['nottingham', 'nottm'], 
     ['wolverhampton', 'wolves'], ['sheffield', 'sheff'], ['tottenham', 'spurs']
@@ -69,11 +61,11 @@ function fuzzyTeam(a, b) {
     if ((w1 === full && w2 === abbr) || (w2 === full && w1 === abbr)) return true;
   }
 
-  // Safe prefix match (e.g., "villarreal" doesn't match "aston villa")
   if (w1.length >= 5 && w2.length >= 5 && (w1.startsWith(w2) || w2.startsWith(w1))) return true;
 
   return false;
 }
+
 // ─── ODDS API ─────────────────────────────────────────────────────────────
 async function fetchOdds(homeTeam, awayTeam) {
   if (!ODDS_API_KEY) return null;
@@ -597,8 +589,13 @@ Analyse this match and respond in this exact JSON format:
       timeout: 15000,
     });
     if (!res.ok) { console.error('[AI] Groq error:', res.status); return null; }
+    
     const data = await res.json();
-    const text = data.choices?.[0]?.message?.content || '{}';
+    let text = data.choices?.[0]?.message?.content || '{}';
+    
+    // STRIP MARKDOWN BEFORE PARSING to prevent crash
+    text = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+
     return { ...JSON.parse(text), is_blind: isBlind };
   } catch(e) {
     console.error('[AI]', e.message);
