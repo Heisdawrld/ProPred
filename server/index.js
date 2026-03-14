@@ -552,7 +552,7 @@ Analyse this match and respond in this exact JSON format:
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: 'llama-3.1-8b-instant',
         messages: [
           { role: 'system', content: 'You are a professional football betting analyst. You study form, odds, and market value. Respond ONLY with valid JSON, no markdown, no preamble.' },
           { role: 'user', content: prompt },
