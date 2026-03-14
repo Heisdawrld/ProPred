@@ -896,6 +896,33 @@ app.post('/api/bsd-predictions/refresh', async (req, res) => {
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+
+// GET /api/debug/team?name=Arsenal&league=Premier+League
+app.get('/api/debug/team', async (req, res) => {
+  try {
+    const { name, league } = req.query;
+    if (!name || !league) return res.status(400).json({ error: 'name and league required' });
+    const form = localdb.getLocalForm(name, name, league);
+    const stats = localdb.getTeamStats(name, league);
+    res.json({ form, stats });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/debug/db
+app.get('/api/debug/db', (req, res) => {
+  try {
+    const Database = require('better-sqlite3');
+    const path = require('path');
+    const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../data');
+    const ldb = new Database(path.join(DATA_DIR, 'localform.db'));
+    const count = ldb.prepare("SELECT COUNT(*) as n FROM matches").get();
+    const leagues = ldb.prepare("SELECT league, season, COUNT(*) as n FROM matches GROUP BY league, season ORDER BY league, season").all();
+    const lastRefresh = ldb.prepare("SELECT value FROM meta WHERE key='last_refresh'").get();
+    ldb.close();
+    res.json({ totalMatches: count.n, lastRefresh: lastRefresh?.value, leagues });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // Catch-all: serve frontend
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../public/index.html'));
