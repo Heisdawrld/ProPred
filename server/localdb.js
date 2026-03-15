@@ -54,41 +54,67 @@ const insertFS = ldb.prepare(`
 const insertManyFS = ldb.transaction(rows => { for (const r of rows) insertFS.run(r); });
 
 async function syncApifyFixtures() {
-  const APIFY_TOKEN = process.env.APIFY_TOKEN;
-  const ID = process.env.APIFY_ACTOR_ID; 
-  if (!APIFY_TOKEN || !ID) return;
+  const APIFY_TOKEN = (process.env.APIFY_TOKEN || '').trim();
+  const ACTOR_ID = (process.env.APIFY_ACTOR_ID || '').trim();
+  const DATASET_ID = (process.env.APIFY_DATASET_ID || process.env.OUTPUT_DATASET_ID || '').trim();
+
+  if (!APIFY_TOKEN || (!ACTOR_ID && !DATASET_ID)) {
+    console.log('[LOCALDB] Apify sync skipped: missing APIFY_TOKEN and/or APIFY_ACTOR_ID/APIFY_DATASET_ID.');
+    return;
+  }
 
   try {
-    let res, url = \`https://api.apify.com/v2/acts/\${ID}/runs/last/dataset/items?token=\${APIFY_TOKEN}\`;
-    res = await fetch(url);
-    if (res.status === 404) {
-      url = \`https://api.apify.com/v2/actor-tasks/\${ID}/runs/last/dataset/items?token=\${APIFY_TOKEN}\`;
-      res = await fetch(url);
+    const urls = [];
+    if (DATASET_ID) {
+      urls.push(`https://api.apify.com/v2/datasets/${DATASET_ID}/items?token=${APIFY_TOKEN}`);
     }
-    if (res.status === 404) {
-      url = \`https://api.apify.com/v2/datasets/\${ID}/items?token=\${APIFY_TOKEN}\`;
-      res = await fetch(url);
+    if (ACTOR_ID) {
+      urls.push(`https://api.apify.com/v2/acts/${ACTOR_ID}/runs/last/dataset/items?token=${APIFY_TOKEN}`);
+      urls.push(`https://api.apify.com/v2/actor-tasks/${ACTOR_ID}/runs/last/dataset/items?token=${APIFY_TOKEN}`);
+      urls.push(`https://api.apify.com/v2/datasets/${ACTOR_ID}/items?token=${APIFY_TOKEN}`);
     }
-    
-    const data = await res.json();
-    const currentYear = new Date().getFullYear().toString();
 
+    let res = null;
+    for (const url of urls) {
+      const candidate = await fetch(url);
+      if (candidate.ok) {
+        res = candidate;
+        break;
+      }
+      if (candidate.status !== 404) {
+        const txt = await candidate.text();
+        throw new Error(`Apify request failed (${candidate.status}): ${txt.slice(0, 200)}`);
+      }
+    }
+
+    if (!res) throw new Error('No Apify actor/task/dataset endpoint returned data.');
+
+    const data = await res.json();
+    if (!Array.isArray(data)) throw new Error('Apify response is not an array.');
+
+    const currentYear = new Date().getFullYear().toString();
     const formattedRows = data.map(item => {
       let dOnly = null;
       if (item.match_date) {
-        // Fix: Ensure date is stored as YYYY-MM-DD
-        const parts = item.match_date.split(' ')[0].split('.').filter(p => p.trim());
+        const parts = String(item.match_date).split(' ')[0].split('.').filter(part => part.trim());
         const d = parts[0], m = parts[1];
         let y = parts[2] || currentYear;
         if (y.length < 4) y = currentYear;
-        dOnly = \`\${y}-\${m.padStart(2, '0')}-\${d.padStart(2, '0')}\`;
+        if (d && m) dOnly = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
       }
       return { ...item, date_only: dOnly };
     }).filter(r => r.date_only && r.match_id);
 
+    if (formattedRows.length === 0) {
+      console.log('[LOCALDB] Apify sync completed: no valid fixture rows found.');
+      return;
+    }
+
     insertManyFS(formattedRows);
-    console.log(\`[LOCALDB] SUCCESS! Ingested \${formattedRows.length} fixtures.\`);
-  } catch(e) { console.error('[LOCALDB] Sync failed:', e.message); }
+    console.log(`[LOCALDB] SUCCESS! Ingested ${formattedRows.length} fixtures.`);
+  } catch (e) {
+    console.error('[LOCALDB] Sync failed:', e.message);
+  }
 }
 
 function getFlashscoreFixtures(dateStr) {

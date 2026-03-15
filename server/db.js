@@ -63,6 +63,25 @@ db.exec(`
     created_at   TEXT DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS prediction_snapshots (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    fixture_id    TEXT NOT NULL,
+    home_team     TEXT,
+    away_team     TEXT,
+    league        TEXT,
+    fixture_date  TEXT,
+    market        TEXT NOT NULL,
+    selection     TEXT NOT NULL,
+    probability   REAL,
+    confidence    INTEGER,
+    odds          REAL,
+    implied_prob  REAL,
+    edge_pct      REAL,
+    source        TEXT,
+    payload_json  TEXT,
+    created_at    TEXT DEFAULT (datetime('now'))
+  );
+
   INSERT OR IGNORE INTO bankroll (id, amount, start_amount) VALUES (1, 1000, 1000);
 `);
 
@@ -236,8 +255,46 @@ function cacheAnalysis(data) {
   } catch(e) { console.error('[CACHE]', e.message); }
 }
 
+function savePredictionSnapshot(snapshot) {
+  try {
+    db.prepare(`INSERT INTO prediction_snapshots
+      (fixture_id, home_team, away_team, league, fixture_date, market, selection, probability, confidence, odds, implied_prob, edge_pct, source, payload_json)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(
+      String(snapshot.fixture_id || ''),
+      snapshot.home_team || null,
+      snapshot.away_team || null,
+      snapshot.league || null,
+      snapshot.fixture_date || null,
+      snapshot.market || 'unknown',
+      snapshot.selection || 'unknown',
+      snapshot.probability ?? null,
+      snapshot.confidence ?? null,
+      snapshot.odds ?? null,
+      snapshot.implied_prob ?? null,
+      snapshot.edge_pct ?? null,
+      snapshot.source || 'model',
+      snapshot.payload_json ? JSON.stringify(snapshot.payload_json) : null,
+    );
+  } catch (e) {
+    console.error('[SNAPSHOT]', e.message);
+  }
+}
+
+function getPredictionSnapshots(opts = {}) {
+  const limit = Math.max(1, Math.min(parseInt(opts.limit, 10) || 50, 500));
+  const fixtureId = opts.fixture_id ? String(opts.fixture_id) : null;
+
+  if (fixtureId) {
+    return db.prepare(`SELECT * FROM prediction_snapshots WHERE fixture_id = ? ORDER BY id DESC LIMIT ?`).all(fixtureId, limit);
+  }
+
+  return db.prepare(`SELECT * FROM prediction_snapshots ORDER BY id DESC LIMIT ?`).all(limit);
+}
+
 module.exports = {
   getBankroll, updateBankroll, resetBankroll, kellyStake,
   placeBet, settleBet, getBets, getStats, evaluateBet,
   getCachedAnalysis, cacheAnalysis,
+  savePredictionSnapshot, getPredictionSnapshots,
 };
