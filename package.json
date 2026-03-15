@@ -1,24 +1,14 @@
- (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/package.json b/package.json
-index 4c20654c16d5049458cc984e2a9e0f0cd270b121..83094dbb94c76a36d53e70537b46c56ca0059281 100644
---- a/package.json
-+++ b/package.json
-@@ -1,13 +1,14 @@
- {
-   "name": "propred-v2",
-   "version": "3.1.0",
-   "main": "server/index.js",
-   "scripts": {
--    "start": "node server/index.js"
-+    "start": "node server/index.js",
-+    "prestart": "node --check server/localdb.js && node --check server/db.js && node --check server/index.js"
-   },
-   "dependencies": {
-     "better-sqlite3": "^9.4.3",
-     "express": "^4.18.2",
-     "node-fetch": "^2.7.0"
-   }
- }
- 
-EOF
-)
+{
+  "name": "propred-v2",
+  "version": "3.1.0",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "prestart": "node --check server/localdb.js && node --check server/db.js && node --check server/index.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.4.3",
+    "express": "^4.18.2",
+    "node-fetch": "^2.7.0"
+  }
+}
