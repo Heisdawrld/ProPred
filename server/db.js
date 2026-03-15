@@ -1,3 +1,4 @@
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
 diff --git a/server/db.js b/server/db.js
 index 1710cb32566d426c17519a4272fe82ef38b797c3..44a4e2142b7756230fa26d1d03b1f7283cc2a013 100644
 --- a/server/db.js
@@ -141,3 +142,6 @@ index 1710cb32566d426c17519a4272fe82ef38b797c3..44a4e2142b7756230fa26d1d03b1f728
    getCachedAnalysis, cacheAnalysis,
 +  savePredictionSnapshot, getPredictionSnapshots,
  };
+ 
+EOF
+)
